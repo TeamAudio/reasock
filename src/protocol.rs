@@ -161,7 +161,23 @@ fn error_response(id: Value, error: RpcError) -> Value {
 }
 
 pub fn notification(method: &str, params: Value) -> String {
-    json!({ "jsonrpc": "2.0", "method": method, "params": params }).to_string()
+    notification_ref(method, &params)
+}
+
+/// Serializes a notification without copying `params`.
+pub fn notification_ref(method: &str, params: &Value) -> String {
+    #[derive(serde::Serialize)]
+    struct Notification<'a> {
+        jsonrpc: &'static str,
+        method: &'a str,
+        params: &'a Value,
+    }
+    serde_json::to_string(&Notification {
+        jsonrpc: "2.0",
+        method,
+        params,
+    })
+    .expect("JSON values always serialize")
 }
 
 #[cfg(test)]

@@ -490,7 +490,7 @@ fn poll_events() {
     let mut tracker = lock(&TRACKER);
     let tracker = tracker.get_or_insert_with(Tracker::default);
     // Still called with nothing wanted, so stale snapshots are forgotten.
-    let snapshots = tracker.poll(&wanted);
+    let changed = tracker.poll(&wanted);
     if wanted.is_empty() {
         return;
     }
@@ -498,15 +498,17 @@ fn poll_events() {
     let mut messages: HashMap<&'static str, String> = HashMap::new();
     for (outbox, events) in subscribers {
         for (event, initial) in events {
-            let snapshot = &snapshots[event];
-            if snapshot.changed || initial {
-                let message = messages.entry(event).or_insert_with(|| {
-                    let message = protocol::notification(event, snapshot.params.clone());
-                    tracker.stats.record_send(event, message.len());
-                    message
-                });
-                let _ = outbox.send(message.clone());
+            if !(initial || changed.contains(&event)) {
+                continue;
             }
+            let Some(params) = tracker.params(event) else {
+                continue;
+            };
+            let message = messages.entry(event).or_insert_with(|| {
+                protocol::notification_ref(event, params)
+            });
+            tracker.stats.record_send(event, message.len());
+            let _ = outbox.send(message.clone());
         }
     }
     tracker.stats.record_tick(started.elapsed());

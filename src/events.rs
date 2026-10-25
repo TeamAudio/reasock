@@ -1,8 +1,9 @@
 //! Tell: state-change notifications for subscribed clients.
 //!
-//! Each timer tick, every event type with at least one subscriber is
-//! snapshotted and compared with the previous snapshot. Changes go to all of
-//! its subscribers; new subscribers get the current snapshot once. Polling
+//! Each timer tick, every event type with at least one subscriber is checked
+//! for changes. Expensive events first compare a cheap fingerprint and only
+//! build a full snapshot when it differs. Changes go to all of the event's
+//! subscribers; new subscribers get the current snapshot once. Polling
 //! covers state that REAPER has no callback for (item selection, project
 //! state) and coalesces bursts to at most one notification per tick.
 
@@ -24,6 +25,16 @@ pub fn lookup(name: &str) -> Option<&'static str> {
     EVENTS.iter().copied().find(|event| *event == name)
 }
 
+/// Fills `out` with a cheap fingerprint of the event's state, if it has one.
+fn fingerprint(event: &str, out: &mut Vec<u64>) -> bool {
+    match event {
+        "items.selectionChanged" => model::selected_items_fingerprint(out),
+        "tracks.selectionChanged" => model::selected_tracks_fingerprint(out),
+        _ => return false,
+    }
+    true
+}
+
 fn snapshot(event: &str) -> Value {
     match event {
         "transport.changed" => model::transport(),
@@ -35,11 +46,17 @@ fn snapshot(event: &str) -> Value {
     }
 }
 
-/// The last snapshot of each event type that currently has subscribers.
+/// The last state of each event type that currently has subscribers.
 #[derive(Default)]
 pub struct Tracker {
-    last: HashMap<&'static str, Value>,
+    last: HashMap<&'static str, Watched>,
+    scratch: Vec<u64>,
     pub stats: Stats,
+}
+
+struct Watched {
+    fingerprint: Option<Vec<u64>>,
+    params: Value,
 }
 
 /// Timing for `debug.stats`: how much main-thread time Tell costs.
@@ -76,6 +93,7 @@ impl Timing {
 
 #[derive(Default)]
 struct EventStats {
+    check: Timing,
     snapshot: Timing,
     compare: Timing,
     sent: u64,
@@ -102,6 +120,7 @@ impl Stats {
             .iter()
             .map(|(event, stats)| {
                 let value = json!({
+                    "check": stats.check.to_json(),
                     "snapshot": stats.snapshot.to_json(),
                     "compare": stats.compare.to_json(),
                     "sent": stats.sent,
@@ -118,33 +137,42 @@ impl Stats {
     }
 }
 
-pub struct Snapshot {
-    pub params: Value,
-    pub changed: bool,
-}
-
 impl Tracker {
-    /// Snapshots the given events, reporting which changed since last time.
-    /// Forgets events that are no longer wanted, so a later subscriber starts
-    /// fresh.
-    pub fn poll(&mut self, wanted: &[&'static str]) -> HashMap<&'static str, Snapshot> {
+    /// Checks the given events and returns those that changed since the last
+    /// poll. Forgets events that are no longer wanted, so a later subscriber
+    /// starts fresh.
+    pub fn poll(&mut self, wanted: &[&'static str]) -> Vec<&'static str> {
         self.last.retain(|event, _| wanted.contains(event));
-        wanted
-            .iter()
-            .map(|&event| {
-                let started = Instant::now();
-                let params = snapshot(event);
-                let snapshotted = Instant::now();
-                let changed = self.last.get(event) != Some(&params);
-                let stats = self.stats.events.entry(event).or_default();
-                stats.snapshot.record(snapshotted - started);
-                stats.compare.record(snapshotted.elapsed());
-                if changed {
-                    self.last.insert(event, params.clone());
+        let mut changed = Vec::new();
+        for &event in wanted {
+            let started = Instant::now();
+            let has_fingerprint = fingerprint(event, &mut self.scratch);
+            let checked = Instant::now();
+            let stats = self.stats.events.entry(event).or_default();
+            stats.check.record(checked - started);
+            if let Some(watched) = self.last.get(event) {
+                if has_fingerprint && watched.fingerprint.as_ref() == Some(&self.scratch) {
+                    continue;
                 }
-                (event, Snapshot { params, changed })
-            })
-            .collect()
+            }
+
+            let params = snapshot(event);
+            let snapshotted = Instant::now();
+            let is_new = self.last.get(event).map(|watched| &watched.params) != Some(&params);
+            stats.snapshot.record(snapshotted - checked);
+            stats.compare.record(snapshotted.elapsed());
+            let fingerprint = has_fingerprint.then(|| self.scratch.clone());
+            self.last.insert(event, Watched { fingerprint, params });
+            if is_new {
+                changed.push(event);
+            }
+        }
+        changed
+    }
+
+    /// The most recent state of a polled event.
+    pub fn params(&self, event: &str) -> Option<&Value> {
+        self.last.get(event).map(|watched| &watched.params)
     }
 }
 

@@ -8,6 +8,7 @@ use reaper_medium::{
     Reaper, TrackAttributeKey,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 
 const CURRENT: ProjectContext = ProjectContext::CurrentProject;
@@ -52,15 +53,38 @@ unsafe fn track_json(track: MediaTrack) -> Value {
     })
 }
 
+/// Per-snapshot scratch space: a reusable path buffer, and track details
+/// looked up once per track rather than once per item.
+struct ItemScratch {
+    path: Vec<c_char>,
+    tracks: HashMap<MediaTrack, (Option<String>, Option<String>)>,
+}
+
+impl ItemScratch {
+    fn new() -> Self {
+        Self {
+            path: vec![0; 4096],
+            tracks: HashMap::new(),
+        }
+    }
+
+    /// # Safety
+    /// `track` must be a valid track in the current project.
+    unsafe fn track(&mut self, track: MediaTrack) -> &(Option<String>, Option<String>) {
+        self.tracks
+            .entry(track)
+            .or_insert_with(|| (track_name(track), track_guid(track)))
+    }
+}
+
 /// # Safety
 /// `item` must be a valid item in the current project.
-unsafe fn item_json(item: MediaItem) -> Value {
+unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
     let reaper = Reaper::get();
     let mut guid = [0 as c_char; 64];
     reaper
         .low()
         .GetSetMediaItemInfo_String(item.as_ptr(), c"GUID".as_ptr(), guid.as_mut_ptr(), false);
-    let track = reaper.get_media_item_track(item);
     let take = reaper.get_active_take(item);
     let name = take.and_then(|take| {
         reaper.get_take_name(take, |name| name.ok().map(|name| name.to_str().to_owned()))
@@ -68,21 +92,26 @@ unsafe fn item_json(item: MediaItem) -> Value {
     let path = take
         .and_then(|take| reaper.get_media_item_take_source(take))
         .map(|source| {
-            let mut buffer = [0 as c_char; 4096];
+            let buffer = &mut scratch.path;
+            buffer[0] = 0;
             reaper.low().GetMediaSourceFileName(
                 source.as_ptr(),
                 buffer.as_mut_ptr(),
                 buffer.len() as i32,
             );
-            from_buffer(&buffer)
+            from_buffer(buffer)
         })
         .filter(|path| !path.is_empty());
+    let (track, track_guid) = match reaper.get_media_item_track(item) {
+        Some(track) => scratch.track(track).clone(),
+        None => (None, None),
+    };
     json!({
         "guid": from_buffer(&guid),
         "name": name,
         "path": path,
-        "track": track.and_then(|track| track_name(track)),
-        "trackGuid": track.and_then(|track| track_guid(track)),
+        "track": track,
+        "trackGuid": track_guid,
         "position": reaper.get_media_item_info_value(item, ItemAttributeKey::Position),
         "length": reaper.get_media_item_info_value(item, ItemAttributeKey::Length),
     })
@@ -90,10 +119,56 @@ unsafe fn item_json(item: MediaItem) -> Value {
 
 pub fn selected_items() -> Vec<Value> {
     let reaper = Reaper::get();
+    let mut scratch = ItemScratch::new();
     (0..reaper.count_selected_media_items(CURRENT))
         .filter_map(|index| reaper.get_selected_media_item(CURRENT, index))
-        .map(|item| unsafe { item_json(item) })
+        .map(|item| unsafe { item_json(item, &mut scratch) })
         .collect()
+}
+
+/// Identifies the current project and its edit state. Names, paths, GUIDs,
+/// and takes only change through edits, which bump the state change count.
+fn project_fingerprint(out: &mut Vec<u64>) {
+    let reaper = Reaper::get();
+    let project = reaper
+        .enum_projects(ProjectRef::Current, 0)
+        .map(|current| current.project.as_ptr() as u64)
+        .unwrap_or(0);
+    out.push(project);
+    out.push(u64::from(reaper.get_project_state_change_count(CURRENT)));
+}
+
+/// Cheap stand-in for `selected_items()`: if this is unchanged, so is the
+/// snapshot. Includes position, length, and track because those change live
+/// while dragging, before the edit is committed.
+pub fn selected_items_fingerprint(out: &mut Vec<u64>) {
+    out.clear();
+    project_fingerprint(out);
+    let reaper = Reaper::get();
+    for index in 0..reaper.count_selected_media_items(CURRENT) {
+        let Some(item) = reaper.get_selected_media_item(CURRENT, index) else {
+            continue;
+        };
+        unsafe {
+            out.push(item.as_ptr() as u64);
+            out.push(reaper.get_media_item_info_value(item, ItemAttributeKey::Position).to_bits());
+            out.push(reaper.get_media_item_info_value(item, ItemAttributeKey::Length).to_bits());
+            out.push(reaper.get_media_item_track(item).map_or(0, |track| track.as_ptr() as u64));
+        }
+    }
+}
+
+/// Cheap stand-in for `selected_tracks()`.
+pub fn selected_tracks_fingerprint(out: &mut Vec<u64>) {
+    out.clear();
+    project_fingerprint(out);
+    let reaper = Reaper::get();
+    let master = MasterTrackBehavior::ExcludeMasterTrack;
+    for index in 0..reaper.count_selected_tracks_2(CURRENT, master) {
+        if let Some(track) = reaper.get_selected_track_2(CURRENT, index, master) {
+            out.push(track.as_ptr() as u64);
+        }
+    }
 }
 
 pub fn selected_tracks() -> Vec<Value> {

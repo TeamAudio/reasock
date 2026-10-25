@@ -369,14 +369,20 @@
               "additionalProperties": {
                 "type": "object",
                 "properties": {
+                  "check": {
+                    "$ref": "#/components/schemas/Timing",
+                    "description": "Cheap change check, every tick"
+                  },
                   "snapshot": {
-                    "$ref": "#/components/schemas/Timing"
+                    "$ref": "#/components/schemas/Timing",
+                    "description": "Full snapshot, only when the check shows a change"
                   },
                   "compare": {
                     "$ref": "#/components/schemas/Timing"
                   },
                   "sent": {
-                    "type": "integer"
+                    "type": "integer",
+                    "description": "Notifications queued, counting each recipient"
                   },
                   "lastBytes": {
                     "type": "integer",

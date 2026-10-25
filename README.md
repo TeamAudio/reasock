@@ -110,6 +110,24 @@ action conflict, -32012 unknown command, and so on).
   ("Move media items") when the mouse is released. Switching project tabs
   updates every event at once, and the state-change count is per project.
   Save As with copied media updates item paths to the copies.
+- **Polling cost grows with the selection, so check cheaply first.** Building
+  a full item snapshot costs several microseconds per selected item (GUID
+  formatting, names, paths, and JSON). Before the fix, watching 16,384 selected
+  items took ~39 ms per tick, more than the whole 33 ms tick, and REAPER's
+  timers dropped to 17 per second. Now each tick compares a cheap fingerprint
+  (project, state change count, and each item's pointer, position, length, and
+  track) and builds the snapshot only when that differs:
+
+  | Selected items | Idle cost per tick, before | After |
+  | --- | --- | --- |
+  | 256 | 2.3 ms | 0.2 ms |
+  | 1,024 | 7.9 ms | 0.7 ms |
+  | 4,096 | 9.6 ms | 2.7 ms |
+  | 16,384 | 39 ms | 8.9 ms |
+
+  Sending a change is still proportional to the selection: 16,384 items make
+  a 3 MB notification that takes ~64 ms to build (release builds,
+  `scripts/bench-events.mjs`).
 - `action.run` with 40004 (File: Quit REAPER) quits cleanly when the project
   has no unsaved changes, which makes automated test runs easy.
 - Registering an action takes about one timer tick (~30 ms). A full
