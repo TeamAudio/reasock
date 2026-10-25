@@ -1,0 +1,26 @@
+[package]
+name = "reasock"
+version = "0.1.0"
+edition = "2021"
+description = "A generic WebSocket bridge between REAPER and the outside world"
+license = "MIT"
+
+[lib]
+name = "reasock"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pinned to the same reaper-rs revision as reaspeech-lib.
+reaper-low = { git = "https://github.com/helgoboss/reaper-rs.git", rev = "955d6a2e8ab3e6ea1251357ee14210cd88d4c2ae" }
+reaper-macros = { git = "https://github.com/helgoboss/reaper-rs.git", rev = "955d6a2e8ab3e6ea1251357ee14210cd88d4c2ae" }
+reaper-medium = { git = "https://github.com/helgoboss/reaper-rs.git", rev = "955d6a2e8ab3e6ea1251357ee14210cd88d4c2ae" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+strip = "symbols"
