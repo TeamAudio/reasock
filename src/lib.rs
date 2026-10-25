@@ -1,6 +1,7 @@
 mod bridge;
 mod discovery;
 mod log;
+mod protocol;
 mod server;
 
 use crate::log::log;

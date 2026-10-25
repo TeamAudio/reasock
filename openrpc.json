@@ -1,0 +1,298 @@
+{
+  "openrpc": "1.4.1",
+  "info": {
+    "title": "ReaSock",
+    "version": "0.1.0",
+    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own are listed under `x-notifications`.",
+    "license": { "name": "MIT" }
+  },
+  "servers": [
+    {
+      "name": "local",
+      "url": "ws://127.0.0.1:{port}",
+      "summary": "A REAPER instance on this machine",
+      "variables": {
+        "port": {
+          "default": "9670",
+          "description": "Read the actual port from the instance file."
+        }
+      }
+    }
+  ],
+  "methods": [
+    {
+      "name": "initialize",
+      "summary": "Start a session",
+      "description": "Must be the first call on a connection. The server always answers with its own `protocolVersion`; if that differs from the client's, the client decides whether to continue. `client.name` namespaces everything this connection registers.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "protocolVersion",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "client",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/ClientInfo" }
+        },
+        {
+          "name": "capabilities",
+          "description": "Reserved for features the client opts into. Currently ignored.",
+          "schema": { "type": "object" }
+        }
+      ],
+      "result": {
+        "name": "session",
+        "schema": { "$ref": "#/components/schemas/InitializeResult" }
+      },
+      "errors": [{ "$ref": "#/components/errors/AlreadyInitialized" }],
+      "examples": [
+        {
+          "name": "demo client",
+          "params": [
+            { "name": "protocolVersion", "value": "0.1.0" },
+            { "name": "client", "value": { "name": "demo", "version": "1.0.0" } }
+          ],
+          "result": {
+            "name": "session",
+            "value": {
+              "protocolVersion": "0.1.0",
+              "server": { "name": "reasock", "version": "0.1.0" },
+              "reaper": { "version": "7.78/macOS-arm64" },
+              "connection": 1,
+              "capabilities": { "actions": { "register": true, "run": true } }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "rpc.discover",
+      "summary": "Get this document",
+      "description": "Returns the OpenRPC document describing this server. Allowed before `initialize`.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "openrpcDocument",
+        "schema": { "type": "object" }
+      }
+    },
+    {
+      "name": "action.register",
+      "summary": "Add an action to REAPER's action list",
+      "description": "Registers `_REASOCK_<client>_<id>` in the main section, labelled `ReaSock (<client>): <label>`. Users can bind it to keys, menus, and toolbars, and those bindings survive restarts. When it runs, this connection receives `action.triggered`. Registering an id this connection already owns returns the existing action. Actions are removed when the connection closes. Always refer to actions by `command`; `commandId` can change between REAPER sessions.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Name" }
+        },
+        {
+          "name": "label",
+          "required": true,
+          "schema": { "type": "string", "minLength": 1 }
+        }
+      ],
+      "result": {
+        "name": "action",
+        "schema": { "$ref": "#/components/schemas/RegisteredAction" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/ActionConflict" },
+        { "$ref": "#/components/errors/RegistrationFailed" }
+      ],
+      "examples": [
+        {
+          "name": "hello action",
+          "params": [
+            { "name": "id", "value": "hello" },
+            { "name": "label", "value": "Hello" }
+          ],
+          "result": {
+            "name": "action",
+            "value": { "command": "_REASOCK_demo_hello", "commandId": 55867 }
+          }
+        }
+      ]
+    },
+    {
+      "name": "action.unregister",
+      "summary": "Remove one of this connection's actions",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Name" }
+        }
+      ],
+      "result": {
+        "name": "empty",
+        "schema": { "type": "object" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/UnknownAction" }
+      ]
+    },
+    {
+      "name": "action.run",
+      "summary": "Run any main-section action",
+      "description": "Runs a built-in action by numeric ID (for example `40182`, Item: Select all items) or any named action (for example `_SWS_ABOUT`, or one registered through ReaSock).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "oneOf": [
+              { "type": "integer", "minimum": 1 },
+              { "type": "string", "minLength": 1 }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "ran",
+        "schema": {
+          "type": "object",
+          "properties": { "commandId": { "type": "integer" } },
+          "required": ["commandId"]
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/UnknownCommand" }
+      ]
+    }
+  ],
+  "x-notifications": [
+    {
+      "name": "action.triggered",
+      "summary": "One of this connection's actions ran",
+      "description": "Sent to the connection that registered the action, whether it ran from a key, a menu, the action list, or `action.run`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Name" }
+        },
+        {
+          "name": "command",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "context",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/ActionContext" }
+        }
+      ]
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Name": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9]{1,32}$",
+        "description": "Used inside REAPER command names, so only ASCII letters and digits."
+      },
+      "ClientInfo": {
+        "type": "object",
+        "properties": {
+          "name": { "$ref": "#/components/schemas/Name" },
+          "version": { "type": "string" }
+        },
+        "required": ["name"]
+      },
+      "InitializeResult": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": { "type": "string" },
+          "server": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" }
+            },
+            "required": ["name", "version"]
+          },
+          "reaper": {
+            "type": "object",
+            "properties": { "version": { "type": "string" } },
+            "required": ["version"]
+          },
+          "connection": { "type": "integer" },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "actions": {
+                "type": "object",
+                "properties": {
+                  "register": { "type": "boolean" },
+                  "run": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "required": ["protocolVersion", "server", "reaper", "connection", "capabilities"]
+      },
+      "RegisteredAction": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Named command, stable across sessions: `_REASOCK_<client>_<id>`."
+          },
+          "commandId": {
+            "type": "integer",
+            "description": "Numeric ID for this REAPER session only."
+          }
+        },
+        "required": ["command", "commandId"]
+      },
+      "ActionContext": {
+        "type": "object",
+        "properties": {
+          "selectedItems": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SelectedItem" }
+          }
+        },
+        "required": ["selectedItems"]
+      },
+      "SelectedItem": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": ["string", "null"],
+            "description": "Source file of the active take, or null for MIDI and empty items."
+          },
+          "track": { "type": ["string", "null"] },
+          "position": { "type": "number", "description": "Seconds" },
+          "length": { "type": "number", "description": "Seconds" }
+        },
+        "required": ["path", "track", "position", "length"]
+      }
+    },
+    "errors": {
+      "NotInitialized": { "code": -32001, "message": "call initialize first" },
+      "AlreadyInitialized": { "code": -32002, "message": "already initialized" },
+      "ActionConflict": {
+        "code": -32010,
+        "message": "the action is owned by another connection"
+      },
+      "UnknownAction": {
+        "code": -32011,
+        "message": "this connection has no action with that id"
+      },
+      "UnknownCommand": { "code": -32012, "message": "REAPER has no such command" },
+      "RegistrationFailed": { "code": -32013, "message": "REAPER refused the registration" }
+    }
+  }
+}

@@ -5,12 +5,12 @@
 //! so no lock may be held across `main_on_command_ex`.
 
 use crate::log::log;
+use crate::protocol::{self, Params, RpcError};
 use crate::server::{ConnId, Inbound};
 use reaper_medium::{
     ActionValueChange, CommandId, HookCommand, HookCommand2, ItemAttributeKey, ProjectContext,
     Reaper, ReaperSession, SectionContext, WindowContext,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -18,7 +18,8 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Mutex, MutexGuard};
 
 struct Connection {
-    client: String,
+    /// Set by `initialize`; used to namespace this connection's actions.
+    client: Option<String>,
     outbox: Sender<String>,
 }
 
@@ -105,10 +106,15 @@ pub extern "C" fn on_timer() {
 fn handle_inbound(message: Inbound) {
     match message {
         Inbound::Connected { conn, outbox } => with_state(|state| {
-            let client = format!("client{conn}");
-            state.connections.insert(conn, Connection { client, outbox });
+            let connection = Connection { client: None, outbox };
+            state.connections.insert(conn, connection);
         }),
-        Inbound::Message { conn, text } => handle_request(conn, &text),
+        Inbound::Message { conn, text } => {
+            let reply = protocol::handle_text(&text, |method, params| call(conn, method, params));
+            if let Some(reply) = reply {
+                send(conn, reply);
+            }
+        }
         Inbound::Disconnected { conn } => disconnect(conn),
     }
 }
@@ -133,92 +139,86 @@ fn disconnect(conn: ConnId) {
     }
 }
 
-#[derive(Deserialize)]
-struct Request {
-    #[serde(default)]
-    id: Option<Value>,
-    method: String,
-    #[serde(default)]
-    params: Value,
-}
-
-fn handle_request(conn: ConnId, text: &str) {
-    let request: Request = match serde_json::from_str(text) {
-        Ok(request) => request,
-        Err(error) => {
-            send(conn, json!({ "id": null, "error": { "message": format!("invalid request: {error}") } }));
-            return;
-        }
-    };
-    let outcome = match request.method.as_str() {
-        "hello" => hello(conn, &request.params),
-        "action.register" => register_action(conn, &request.params),
-        "action.unregister" => unregister_action(conn, &request.params),
-        "action.run" => run_action(&request.params),
-        other => Err(format!("unknown method: {other}")),
-    };
-    let Some(id) = request.id else {
-        return;
-    };
-    let reply = match outcome {
-        Ok(result) => json!({ "id": id, "result": result }),
-        Err(message) => json!({ "id": id, "error": { "message": message } }),
-    };
-    send(conn, reply);
-}
-
-fn send(conn: ConnId, message: Value) {
+fn send(conn: ConnId, text: String) {
     let outbox = with_state(|state| state.connections.get(&conn).map(|c| c.outbox.clone()));
     if let Some(outbox) = outbox {
-        let _ = outbox.send(message.to_string());
+        let _ = outbox.send(text);
+    }
+}
+
+fn call(conn: ConnId, method: &str, params: Params) -> Result<Value, RpcError> {
+    match method {
+        "initialize" => return initialize(conn, &params),
+        "rpc.discover" => return discover(),
+        _ => {}
+    }
+    if !protocol::METHODS.contains(&method) {
+        return Err(RpcError::method_not_found(method));
+    }
+    let client = with_state(|state| state.connections.get(&conn).and_then(|c| c.client.clone()))
+        .ok_or_else(RpcError::not_initialized)?;
+    match method {
+        "action.register" => register_action(conn, &client, &params),
+        "action.unregister" => unregister_action(conn, &params),
+        "action.run" => run_action(&params),
+        other => Err(RpcError::internal(format!("{other} is listed but not implemented"))),
     }
 }
 
 /// Command names may only contain A-Z, a-z and 0-9 (plus our underscores).
-fn validate_name(value: &str, what: &str) -> Result<(), String> {
+fn validate_name(value: &str, what: &str) -> Result<(), RpcError> {
     let valid = !value.is_empty()
         && value.len() <= 32
         && value.chars().all(|c| c.is_ascii_alphanumeric());
     if valid {
         Ok(())
     } else {
-        Err(format!("{what} must be 1-32 ASCII letters or digits"))
+        Err(RpcError::invalid_params(format!(
+            "{what} must be 1-32 ASCII letters or digits"
+        )))
     }
 }
 
-fn str_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
-    params
-        .get(key)
+fn initialize(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
+    params.str("protocolVersion")?;
+    let client = params
+        .get("client")
+        .and_then(|client| client.get("name"))
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("missing string param: {key}"))
-}
-
-fn hello(conn: ConnId, params: &Value) -> Result<Value, String> {
-    let client = str_param(params, "client")?;
-    validate_name(client, "client")?;
+        .ok_or_else(|| RpcError::invalid_params("client.name must be a string"))?;
+    validate_name(client, "client.name")?;
     with_state(|state| {
-        if state.actions.values().any(|a| a.conn == conn) {
-            return Err("hello must come before registering actions".to_owned());
+        let connection = state
+            .connections
+            .get_mut(&conn)
+            .ok_or_else(|| RpcError::internal("unknown connection"))?;
+        if connection.client.is_some() {
+            return Err(RpcError::already_initialized());
         }
-        if let Some(connection) = state.connections.get_mut(&conn) {
-            connection.client = client.to_owned();
-        }
+        connection.client = Some(client.to_owned());
         Ok(())
     })?;
+    log!("conn {conn}: initialized as {client}");
     Ok(json!({
-        "reasock": env!("CARGO_PKG_VERSION"),
-        "reaper": reaper_version(),
+        "protocolVersion": protocol::PROTOCOL_VERSION,
+        "server": { "name": "reasock", "version": env!("CARGO_PKG_VERSION") },
+        "reaper": { "version": reaper_version() },
         "connection": conn,
+        "capabilities": { "actions": { "register": true, "run": true } },
     }))
 }
 
-fn register_action(conn: ConnId, params: &Value) -> Result<Value, String> {
-    let id = str_param(params, "id")?;
-    let label = str_param(params, "label")?;
-    validate_name(id, "id")?;
+fn discover() -> Result<Value, RpcError> {
+    serde_json::from_str(protocol::OPENRPC).map_err(|error| RpcError::internal(error.to_string()))
+}
 
-    let client = with_state(|state| state.connections.get(&conn).map(|c| c.client.clone()))
-        .ok_or("unknown connection")?;
+fn register_action(conn: ConnId, client: &str, params: &Params) -> Result<Value, RpcError> {
+    let id = params.str("id")?;
+    let label = params.str("label")?;
+    validate_name(id, "id")?;
+    if label.is_empty() {
+        return Err(RpcError::invalid_params("label must not be empty"));
+    }
     let command_name = format!("REASOCK_{client}_{id}");
 
     let existing = with_state(|state| {
@@ -232,7 +232,11 @@ fn register_action(conn: ConnId, params: &Value) -> Result<Value, String> {
         Some((command, owner)) if owner == conn => {
             return Ok(json!({ "command": format!("_{command_name}"), "commandId": command.get() }));
         }
-        Some(_) => return Err(format!("_{command_name} is owned by another connection")),
+        Some(_) => {
+            return Err(RpcError::action_conflict(format!(
+                "_{command_name} is owned by another connection"
+            )))
+        }
         None => {}
     }
 
@@ -257,9 +261,9 @@ fn register_action(conn: ConnId, params: &Value) -> Result<Value, String> {
 fn register_custom_action(
     command_name: &str,
     description: &str,
-) -> Result<(CommandId, Box<CustomAction>), String> {
-    let id_str = CString::new(command_name).map_err(|error| error.to_string())?;
-    let name = CString::new(description).map_err(|error| error.to_string())?;
+) -> Result<(CommandId, Box<CustomAction>), RpcError> {
+    let id_str = CString::new(command_name).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+    let name = CString::new(description).map_err(|e| RpcError::invalid_params(e.to_string()))?;
     let mut action = Box::new(CustomAction {
         register: CustomActionRegister {
             unique_section_id: 0,
@@ -277,13 +281,15 @@ fn register_custom_action(
         )
     };
     if raw_id <= 0 {
-        return Err("custom_action registration failed".into());
+        return Err(RpcError::registration_failed(format!(
+            "REAPER refused _{command_name}"
+        )));
     }
     Ok((CommandId::new(raw_id as u32), action))
 }
 
-fn unregister_action(conn: ConnId, params: &Value) -> Result<Value, String> {
-    let id = str_param(params, "id")?;
+fn unregister_action(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
+    let id = params.str("id")?;
     let removed = with_state(|state| {
         let command = state
             .actions
@@ -292,13 +298,14 @@ fn unregister_action(conn: ConnId, params: &Value) -> Result<Value, String> {
             .map(|(command, _)| *command)?;
         state.actions.remove(&command)
     });
-    let action = removed.ok_or_else(|| format!("no action with id {id}"))?;
+    let action =
+        removed.ok_or_else(|| RpcError::unknown_action(format!("no action with id {id}")))?;
     action.registration.remove();
     log!("conn {conn}: unregistered _{}", action.command_name);
     Ok(json!({}))
 }
 
-fn run_action(params: &Value) -> Result<Value, String> {
+fn run_action(params: &Params) -> Result<Value, RpcError> {
     let reaper = Reaper::get();
     let command = match params.get("command") {
         Some(Value::Number(number)) => number
@@ -307,9 +314,26 @@ fn run_action(params: &Value) -> Result<Value, String> {
             .filter(|n| *n > 0)
             .map(CommandId::new),
         Some(Value::String(name)) => reaper.named_command_lookup(name.as_str()),
-        _ => return Err("command must be a command ID or a named command".into()),
+        _ => {
+            return Err(RpcError::invalid_params(
+                "command must be a command ID or a named command",
+            ))
+        }
     }
-    .ok_or("unknown command")?;
+    .ok_or_else(|| RpcError::unknown_command(format!("unknown command: {}", params.get("command").unwrap())))?;
+    // REAPER keeps resolving names of unregistered actions (that's how their
+    // key bindings survive), so check the action list instead.
+    let available = unsafe {
+        reaper.kbd_get_text_from_cmd(command, SectionContext::MainSection, |text| {
+            !text.to_str().is_empty()
+        })
+    };
+    if available != Some(true) {
+        return Err(RpcError::unknown_command(format!(
+            "command {} is not currently available",
+            command.get()
+        )));
+    }
     // Re-enters `Hook::call` for our own actions; no locks are held here.
     reaper.main_on_command_ex(command, 0, ProjectContext::CurrentProject);
     Ok(json!({ "commandId": command.get() }))
@@ -349,15 +373,15 @@ fn dispatch(command: CommandId) -> bool {
     let Some((outbox, id, command_name)) = target else {
         return false;
     };
-    let message = json!({
-        "method": "action.triggered",
-        "params": {
+    let message = protocol::notification(
+        "action.triggered",
+        json!({
             "id": id,
             "command": format!("_{command_name}"),
             "context": { "selectedItems": selected_items() },
-        },
-    });
-    let _ = outbox.send(message.to_string());
+        }),
+    );
+    let _ = outbox.send(message);
     true
 }
 

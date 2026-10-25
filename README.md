@@ -20,32 +20,45 @@ This is a spike. It proves Lend end to end, plus the smallest Ask (`action.run`)
 # restart REAPER
 node examples/hello.mjs      # registers "ReaSock (demo): Hello"
 node examples/hello.mjs --self-test
+node scripts/smoke-test.mjs  # protocol checks against the running REAPER
+cargo test                   # envelope tests, no REAPER needed
 ```
 
 On load, ReaSock listens on `127.0.0.1`, using the first free port from 9670
 to 9679 (`REASOCK_PORT` overrides this). It writes
 `~/.reasock/instances/<pid>.json` and logs to `~/.reasock/reasock.log`.
+`examples/reasock-client.mjs` is a small dependency-free Node client.
 
-## Protocol (spike)
+## Protocol
 
-JSON text frames, loosely shaped like JSON-RPC.
+[JSON-RPC 2.0](https://www.jsonrpc.org/specification) over WebSocket text
+frames, with params by name. Batches and notifications are supported. The
+methods are described in [`openrpc.json`](openrpc.json)
+([OpenRPC](https://open-rpc.org/) 1.4), which the server also returns from
+`rpc.discover`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `hello` | `{client}` | `{reasock, reaper, connection}` |
+| `initialize` | `{protocolVersion, client: {name, version?}, capabilities?}` | `{protocolVersion, server, reaper, connection, capabilities}` |
+| `rpc.discover` | | the OpenRPC document |
 | `action.register` | `{id, label}` | `{command, commandId}` |
 | `action.unregister` | `{id}` | `{}` |
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
 
-When a registered action runs, the owning client receives:
+`initialize` must come first; only `rpc.discover` is allowed before it. When a
+registered action runs, the client that owns it receives a notification. These
+server-to-client notifications are listed under `x-notifications` in the
+OpenRPC document:
 
 ```json
-{"method": "action.triggered", "params": {"id": "hello", "command": "_REASOCK_demo_hello",
+{"jsonrpc": "2.0", "method": "action.triggered", "params": {"id": "hello", "command": "_REASOCK_demo_hello",
   "context": {"selectedItems": [{"path": "/…/tone.wav", "track": "tone", "position": 0, "length": 2}]}}}
 ```
 
-Actions are named `_REASOCK_<client>_<id>`. A client's actions are removed
-when it disconnects.
+Actions are named `_REASOCK_<client>_<id>` and are removed when their
+connection closes. Errors use the standard JSON-RPC codes, plus the
+application codes listed in `openrpc.json` (-32001 not initialized, -32010
+action conflict, -32012 unknown command, and so on).
 
 ## Spike findings (REAPER 7.78, macOS arm64)
 
@@ -64,9 +77,15 @@ when it disconnects.
   action"). When the client registers again, even after a REAPER restart, the
   same key works again. The binding is stored by name, so command IDs don't
   matter, and clients should always use the `_REASOCK_…` name.
+- **REAPER keeps resolving the names of unregistered actions.**
+  `NamedCommandLookup` still returns an ID, and `Main_OnCommand` on it silently
+  does nothing. `action.run` therefore checks `kbd_getTextFromCmd` and rejects
+  commands that aren't in the action list.
 - **Modal dialogs pause the bridge.** The main-thread timer doesn't run while,
   for example, the update notification is open. Requests queue until it
   closes, so clients need timeouts and a "REAPER busy" state.
+- `action.run` with 40004 (File: Quit REAPER) quits cleanly when the project
+  has no unsaved changes, which makes automated test runs easy.
 - Registering an action takes about one timer tick (~30 ms). A full
   register → run → triggered round trip takes ~130 ms.
 
