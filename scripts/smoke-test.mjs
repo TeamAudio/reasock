@@ -146,6 +146,44 @@ await check("action.unregister removes the action", async () => {
   await assert.rejects(client.call("action.run", { command: "_REASOCK_smoke2_ping" }), { code: -32012 });
 });
 
+await check("events.subscribe rejects unknown events (-32602)", async () => {
+  await assert.rejects(client.call("events.subscribe", { events: ["nope.happened"] }), { code: -32602 });
+});
+
+await check("subscribing sends the current state once", async () => {
+  const events = client.session.capabilities.events.available;
+  const received = new Map();
+  for (const event of events) client.on(event, (params) => received.set(event, params));
+  const result = await client.call("events.subscribe", { events });
+  assert.deepEqual([...result.events].sort(), [...events].sort());
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual([...received.keys()].sort(), [...events].sort());
+  assert.equal(typeof received.get("transport.changed").playing, "boolean");
+  assert.ok(Array.isArray(received.get("items.selectionChanged").selectedItems));
+});
+
+await check("transport.changed follows play and stop", async () => {
+  const states = [];
+  client.on("transport.changed", ({ playing }) => states.push(playing));
+  await client.call("action.run", { command: 1007 }); // Transport: Play
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await client.call("action.run", { command: 1016 }); // Transport: Stop
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(states, [true, false]);
+});
+
+await check("events.unsubscribe stops notifications", async () => {
+  const result = await client.call("events.unsubscribe", { events: ["transport.changed"] });
+  assert.ok(!result.events.includes("transport.changed"));
+  let fired = false;
+  client.on("transport.changed", () => (fired = true));
+  await client.call("action.run", { command: 1007 });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await client.call("action.run", { command: 1016 });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(fired, false);
+});
+
 raw.close();
 client.close();
 console.log(failures ? `\n${failures} failed` : "\nall passed");

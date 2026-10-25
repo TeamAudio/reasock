@@ -1,6 +1,8 @@
 mod bridge;
 mod discovery;
+mod events;
 mod log;
+mod model;
 mod protocol;
 mod server;
 
@@ -24,7 +26,7 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     session.plugin_register_add_timer(bridge::on_timer)?;
     session.plugin_register_add_at_exit(on_exit)?;
 
-    let reaper_version = bridge::reaper_version();
+    let reaper_version = model::reaper_version();
     let instance = discovery::write(port, &reaper_version)?;
     bridge::init(inbox, session);
 

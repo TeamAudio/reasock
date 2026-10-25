@@ -13,6 +13,9 @@ pub const METHODS: &[&str] = &[
     "action.register",
     "action.unregister",
     "action.run",
+    "events.subscribe",
+    "events.unsubscribe",
+    "debug.stats",
 ];
 
 /// The OpenRPC description of the protocol, served by `rpc.discover`.

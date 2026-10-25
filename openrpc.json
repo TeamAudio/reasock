@@ -3,8 +3,10 @@
   "info": {
     "title": "ReaSock",
     "version": "0.1.0",
-    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own are listed under `x-notifications`.",
-    "license": { "name": "MIT" }
+    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`.",
+    "license": {
+      "name": "MIT"
+    }
   },
   "servers": [
     {
@@ -29,39 +31,79 @@
         {
           "name": "protocolVersion",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "client",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/ClientInfo" }
+          "schema": {
+            "$ref": "#/components/schemas/ClientInfo"
+          }
         },
         {
           "name": "capabilities",
           "description": "Reserved for features the client opts into. Currently ignored.",
-          "schema": { "type": "object" }
+          "schema": {
+            "type": "object"
+          }
         }
       ],
       "result": {
         "name": "session",
-        "schema": { "$ref": "#/components/schemas/InitializeResult" }
+        "schema": {
+          "$ref": "#/components/schemas/InitializeResult"
+        }
       },
-      "errors": [{ "$ref": "#/components/errors/AlreadyInitialized" }],
+      "errors": [
+        {
+          "$ref": "#/components/errors/AlreadyInitialized"
+        }
+      ],
       "examples": [
         {
           "name": "demo client",
           "params": [
-            { "name": "protocolVersion", "value": "0.1.0" },
-            { "name": "client", "value": { "name": "demo", "version": "1.0.0" } }
+            {
+              "name": "protocolVersion",
+              "value": "0.1.0"
+            },
+            {
+              "name": "client",
+              "value": {
+                "name": "demo",
+                "version": "1.0.0"
+              }
+            }
           ],
           "result": {
             "name": "session",
             "value": {
               "protocolVersion": "0.1.0",
-              "server": { "name": "reasock", "version": "0.1.0" },
-              "reaper": { "version": "7.78/macOS-arm64" },
+              "server": {
+                "name": "reasock",
+                "version": "0.1.0"
+              },
+              "reaper": {
+                "version": "7.78/macOS-arm64"
+              },
               "connection": 1,
-              "capabilities": { "actions": { "register": true, "run": true } }
+              "capabilities": {
+                "actions": {
+                  "register": true,
+                  "run": true
+                },
+                "events": {
+                  "available": [
+                    "transport.changed",
+                    "project.changed",
+                    "project.edited",
+                    "items.selectionChanged",
+                    "tracks.selectionChanged"
+                  ]
+                }
+              }
             }
           }
         }
@@ -75,7 +117,9 @@
       "params": [],
       "result": {
         "name": "openrpcDocument",
-        "schema": { "type": "object" }
+        "schema": {
+          "type": "object"
+        }
       }
     },
     {
@@ -87,33 +131,55 @@
         {
           "name": "id",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/Name" }
+          "schema": {
+            "$ref": "#/components/schemas/Name"
+          }
         },
         {
           "name": "label",
           "required": true,
-          "schema": { "type": "string", "minLength": 1 }
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       ],
       "result": {
         "name": "action",
-        "schema": { "$ref": "#/components/schemas/RegisteredAction" }
+        "schema": {
+          "$ref": "#/components/schemas/RegisteredAction"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotInitialized" },
-        { "$ref": "#/components/errors/ActionConflict" },
-        { "$ref": "#/components/errors/RegistrationFailed" }
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/ActionConflict"
+        },
+        {
+          "$ref": "#/components/errors/RegistrationFailed"
+        }
       ],
       "examples": [
         {
           "name": "hello action",
           "params": [
-            { "name": "id", "value": "hello" },
-            { "name": "label", "value": "Hello" }
+            {
+              "name": "id",
+              "value": "hello"
+            },
+            {
+              "name": "label",
+              "value": "Hello"
+            }
           ],
           "result": {
             "name": "action",
-            "value": { "command": "_REASOCK_demo_hello", "commandId": 55867 }
+            "value": {
+              "command": "_REASOCK_demo_hello",
+              "commandId": 55867
+            }
           }
         }
       ]
@@ -126,16 +192,24 @@
         {
           "name": "id",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/Name" }
+          "schema": {
+            "$ref": "#/components/schemas/Name"
+          }
         }
       ],
       "result": {
         "name": "empty",
-        "schema": { "type": "object" }
+        "schema": {
+          "type": "object"
+        }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotInitialized" },
-        { "$ref": "#/components/errors/UnknownAction" }
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/UnknownAction"
+        }
       ]
     },
     {
@@ -149,8 +223,14 @@
           "required": true,
           "schema": {
             "oneOf": [
-              { "type": "integer", "minimum": 1 },
-              { "type": "string", "minLength": 1 }
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              }
             ]
           }
         }
@@ -159,13 +239,164 @@
         "name": "ran",
         "schema": {
           "type": "object",
-          "properties": { "commandId": { "type": "integer" } },
-          "required": ["commandId"]
+          "properties": {
+            "commandId": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "commandId"
+          ]
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotInitialized" },
-        { "$ref": "#/components/errors/UnknownCommand" }
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/UnknownCommand"
+        }
+      ]
+    },
+    {
+      "name": "events.subscribe",
+      "summary": "Start receiving state-change notifications",
+      "description": "Adds events to this connection's subscriptions. Right after subscribing, the connection receives each newly subscribed event once with the current state; after that, only when the state changes. State is checked about 30 times per second, and bursts of changes arrive as one notification per check.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "events",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventName"
+            },
+            "minItems": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "subscriptions",
+        "schema": {
+          "$ref": "#/components/schemas/Subscriptions"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ],
+      "examples": [
+        {
+          "name": "follow the selection",
+          "params": [
+            {
+              "name": "events",
+              "value": [
+                "items.selectionChanged"
+              ]
+            }
+          ],
+          "result": {
+            "name": "subscriptions",
+            "value": {
+              "events": [
+                "items.selectionChanged"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "events.unsubscribe",
+      "summary": "Stop receiving notifications",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "events",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventName"
+            },
+            "minItems": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "subscriptions",
+        "schema": {
+          "$ref": "#/components/schemas/Subscriptions"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "debug.stats",
+      "summary": "Main-thread time spent on events",
+      "description": "Reports how much of REAPER's main thread Tell is using: per timer tick (snapshots, comparisons, and serializing notifications), and per event. Times are in microseconds. Pass `reset: true` to start a new measurement window after reading.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "reset",
+          "schema": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      ],
+      "result": {
+        "name": "stats",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "number",
+              "description": "Length of the measurement window"
+            },
+            "ticks": {
+              "$ref": "#/components/schemas/Timing"
+            },
+            "events": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "snapshot": {
+                    "$ref": "#/components/schemas/Timing"
+                  },
+                  "compare": {
+                    "$ref": "#/components/schemas/Timing"
+                  },
+                  "sent": {
+                    "type": "integer"
+                  },
+                  "lastBytes": {
+                    "type": "integer",
+                    "description": "Size of the most recent notification"
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "seconds",
+            "ticks",
+            "events"
+          ]
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
       ]
     }
   ],
@@ -179,17 +410,158 @@
         {
           "name": "id",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/Name" }
+          "schema": {
+            "$ref": "#/components/schemas/Name"
+          }
         },
         {
           "name": "command",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         },
         {
           "name": "context",
           "required": true,
-          "schema": { "$ref": "#/components/schemas/ActionContext" }
+          "schema": {
+            "$ref": "#/components/schemas/ActionContext"
+          }
+        }
+      ]
+    },
+    {
+      "name": "transport.changed",
+      "summary": "Play, pause, or record state changed",
+      "description": "Subscribe with `events.subscribe`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "playing",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "paused",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "recording",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ]
+    },
+    {
+      "name": "project.changed",
+      "summary": "A different project is current, or the current one was saved or became dirty",
+      "description": "Fires on tab switches, opening, saving, save-as, and the first edit after a save. `name` and `path` are null until the project is saved. Subscribe with `events.subscribe`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "tab",
+          "required": true,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "path",
+          "required": true,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "dirty",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ]
+    },
+    {
+      "name": "project.edited",
+      "summary": "An undoable change happened in the current project",
+      "description": "`stateChangeCount` increases with every change; `lastUndo` describes the most recent undo point (for example \"Move media items\"). Subscribe with `events.subscribe`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "stateChangeCount",
+          "required": true,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "lastUndo",
+          "required": true,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "items.selectionChanged",
+      "summary": "The set of selected items changed, or a selected item changed",
+      "description": "Carries every selected item, so it also fires when a selected item is moved, trimmed, or renamed. Subscribe with `events.subscribe`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "selectedItems",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "tracks.selectionChanged",
+      "summary": "The set of selected tracks changed, or a selected track was renamed or moved",
+      "description": "The master track is never included. Subscribe with `events.subscribe`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "selectedTracks",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Track"
+            }
+          }
         }
       ]
     }
@@ -204,43 +576,87 @@
       "ClientInfo": {
         "type": "object",
         "properties": {
-          "name": { "$ref": "#/components/schemas/Name" },
-          "version": { "type": "string" }
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "version": {
+            "type": "string"
+          }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       },
       "InitializeResult": {
         "type": "object",
         "properties": {
-          "protocolVersion": { "type": "string" },
+          "protocolVersion": {
+            "type": "string"
+          },
           "server": {
             "type": "object",
             "properties": {
-              "name": { "type": "string" },
-              "version": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
             },
-            "required": ["name", "version"]
+            "required": [
+              "name",
+              "version"
+            ]
           },
           "reaper": {
             "type": "object",
-            "properties": { "version": { "type": "string" } },
-            "required": ["version"]
+            "properties": {
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version"
+            ]
           },
-          "connection": { "type": "integer" },
+          "connection": {
+            "type": "integer"
+          },
           "capabilities": {
             "type": "object",
             "properties": {
               "actions": {
                 "type": "object",
                 "properties": {
-                  "register": { "type": "boolean" },
-                  "run": { "type": "boolean" }
+                  "register": {
+                    "type": "boolean"
+                  },
+                  "run": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "events": {
+                "type": "object",
+                "properties": {
+                  "available": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/EventName"
+                    }
+                  }
                 }
               }
             }
           }
         },
-        "required": ["protocolVersion", "server", "reaper", "connection", "capabilities"]
+        "required": [
+          "protocolVersion",
+          "server",
+          "reaper",
+          "connection",
+          "capabilities"
+        ]
       },
       "RegisteredAction": {
         "type": "object",
@@ -254,35 +670,157 @@
             "description": "Numeric ID for this REAPER session only."
           }
         },
-        "required": ["command", "commandId"]
+        "required": [
+          "command",
+          "commandId"
+        ]
       },
       "ActionContext": {
         "type": "object",
         "properties": {
           "selectedItems": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/SelectedItem" }
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            }
           }
         },
-        "required": ["selectedItems"]
+        "required": [
+          "selectedItems"
+        ]
       },
-      "SelectedItem": {
+      "EventName": {
+        "type": "string",
+        "enum": [
+          "transport.changed",
+          "project.changed",
+          "project.edited",
+          "items.selectionChanged",
+          "tracks.selectionChanged"
+        ]
+      },
+      "Subscriptions": {
         "type": "object",
         "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventName"
+            }
+          }
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "Item": {
+        "type": "object",
+        "properties": {
+          "guid": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the active take"
+          },
           "path": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Source file of the active take, or null for MIDI and empty items."
           },
-          "track": { "type": ["string", "null"] },
-          "position": { "type": "number", "description": "Seconds" },
-          "length": { "type": "number", "description": "Seconds" }
+          "track": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Track name"
+          },
+          "trackGuid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "number",
+            "description": "Seconds"
+          },
+          "length": {
+            "type": "number",
+            "description": "Seconds"
+          }
         },
-        "required": ["path", "track", "position", "length"]
+        "required": [
+          "guid",
+          "name",
+          "path",
+          "track",
+          "trackGuid",
+          "position",
+          "length"
+        ],
+        "description": "A media item. `guid` is stable across sessions."
+      },
+      "Track": {
+        "type": "object",
+        "description": "A track. `guid` is stable across sessions; `number` is the 1-based position shown in REAPER.",
+        "properties": {
+          "guid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "number": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "guid",
+          "name",
+          "number"
+        ]
+      },
+      "Timing": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "avgUs": {
+            "type": "integer"
+          },
+          "maxUs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "avgUs",
+          "maxUs"
+        ]
       }
     },
     "errors": {
-      "NotInitialized": { "code": -32001, "message": "call initialize first" },
-      "AlreadyInitialized": { "code": -32002, "message": "already initialized" },
+      "NotInitialized": {
+        "code": -32001,
+        "message": "call initialize first"
+      },
+      "AlreadyInitialized": {
+        "code": -32002,
+        "message": "already initialized"
+      },
       "ActionConflict": {
         "code": -32010,
         "message": "the action is owned by another connection"
@@ -291,8 +829,14 @@
         "code": -32011,
         "message": "this connection has no action with that id"
       },
-      "UnknownCommand": { "code": -32012, "message": "REAPER has no such command" },
-      "RegistrationFailed": { "code": -32013, "message": "REAPER refused the registration" }
+      "UnknownCommand": {
+        "code": -32012,
+        "message": "REAPER has no such command"
+      },
+      "RegistrationFailed": {
+        "code": -32013,
+        "message": "REAPER refused the registration"
+      }
     }
   }
 }

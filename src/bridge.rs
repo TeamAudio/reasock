@@ -4,16 +4,18 @@
 //! command hooks. Running an action re-enters the command hook synchronously,
 //! so no lock may be held across `main_on_command_ex`.
 
+use crate::events::{self, Tracker};
 use crate::log::log;
+use crate::model;
 use crate::protocol::{self, Params, RpcError};
 use crate::server::{ConnId, Inbound};
 use reaper_medium::{
-    ActionValueChange, CommandId, HookCommand, HookCommand2, ItemAttributeKey, ProjectContext,
-    Reaper, ReaperSession, SectionContext, WindowContext,
+    ActionValueChange, CommandId, HookCommand, HookCommand2, ProjectContext, Reaper,
+    ReaperSession, SectionContext, WindowContext,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::collections::{BTreeSet, HashMap};
+use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Mutex, MutexGuard};
 
@@ -21,6 +23,9 @@ struct Connection {
     /// Set by `initialize`; used to namespace this connection's actions.
     client: Option<String>,
     outbox: Sender<String>,
+    subscriptions: BTreeSet<&'static str>,
+    /// Subscribed since the last tick; owed the current snapshot.
+    pending_initial: BTreeSet<&'static str>,
 }
 
 struct Action {
@@ -71,6 +76,7 @@ struct State {
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
+static TRACKER: Mutex<Option<Tracker>> = Mutex::new(None);
 static INBOX: Mutex<Option<Receiver<Inbound>>> = Mutex::new(None);
 /// Kept alive for the life of REAPER; dropping it unregisters the hooks.
 static SESSION: Mutex<Option<ReaperSession>> = Mutex::new(None);
@@ -97,6 +103,7 @@ pub extern "C" fn on_timer() {
         for message in pending {
             handle_inbound(message);
         }
+        poll_events();
     });
     if result.is_err() {
         log!("panic in timer");
@@ -106,7 +113,12 @@ pub extern "C" fn on_timer() {
 fn handle_inbound(message: Inbound) {
     match message {
         Inbound::Connected { conn, outbox } => with_state(|state| {
-            let connection = Connection { client: None, outbox };
+            let connection = Connection {
+                client: None,
+                outbox,
+                subscriptions: BTreeSet::new(),
+                pending_initial: BTreeSet::new(),
+            };
             state.connections.insert(conn, connection);
         }),
         Inbound::Message { conn, text } => {
@@ -161,6 +173,9 @@ fn call(conn: ConnId, method: &str, params: Params) -> Result<Value, RpcError> {
         "action.register" => register_action(conn, &client, &params),
         "action.unregister" => unregister_action(conn, &params),
         "action.run" => run_action(&params),
+        "events.subscribe" => subscribe(conn, &params),
+        "events.unsubscribe" => unsubscribe(conn, &params),
+        "debug.stats" => debug_stats(&params),
         other => Err(RpcError::internal(format!("{other} is listed but not implemented"))),
     }
 }
@@ -202,9 +217,12 @@ fn initialize(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
     Ok(json!({
         "protocolVersion": protocol::PROTOCOL_VERSION,
         "server": { "name": "reasock", "version": env!("CARGO_PKG_VERSION") },
-        "reaper": { "version": reaper_version() },
+        "reaper": { "version": model::reaper_version() },
         "connection": conn,
-        "capabilities": { "actions": { "register": true, "run": true } },
+        "capabilities": {
+            "actions": { "register": true, "run": true },
+            "events": { "available": events::EVENTS },
+        },
     }))
 }
 
@@ -378,54 +396,118 @@ fn dispatch(command: CommandId) -> bool {
         json!({
             "id": id,
             "command": format!("_{command_name}"),
-            "context": { "selectedItems": selected_items() },
+            "context": { "selectedItems": model::selected_items() },
         }),
     );
     let _ = outbox.send(message);
     true
 }
 
-fn selected_items() -> Vec<Value> {
-    let reaper = Reaper::get();
-    let project = ProjectContext::CurrentProject;
-    let count = reaper.count_selected_media_items(project);
-    (0..count)
-        .filter_map(|index| reaper.get_selected_media_item(project, index))
-        .map(|item| unsafe {
-            let track = reaper
-                .get_media_item_track(item)
-                .and_then(|track| {
-                    reaper.get_set_media_track_info_get_name(track, |name| {
-                        name.to_str().to_owned()
-                    })
-                });
-            let path = reaper
-                .get_active_take(item)
-                .and_then(|take| reaper.get_media_item_take_source(take))
-                .map(|source| {
-                    let mut buffer = [0 as c_char; 4096];
-                    reaper.low().GetMediaSourceFileName(
-                        source.as_ptr(),
-                        buffer.as_mut_ptr(),
-                        buffer.len() as i32,
-                    );
-                    CStr::from_ptr(buffer.as_ptr()).to_string_lossy().into_owned()
-                })
-                .filter(|path| !path.is_empty());
-            json!({
-                "path": path,
-                "track": track,
-                "position": reaper.get_media_item_info_value(item, ItemAttributeKey::Position),
-                "length": reaper.get_media_item_info_value(item, ItemAttributeKey::Length),
+fn event_names(params: &Params) -> Result<Vec<&'static str>, RpcError> {
+    let names = params
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RpcError::invalid_params("events must be an array of event names"))?;
+    names
+        .iter()
+        .map(|name| {
+            name.as_str().and_then(events::lookup).ok_or_else(|| {
+                RpcError::invalid_params(format!(
+                    "unknown event {name}; available: {}",
+                    events::EVENTS.join(", ")
+                ))
             })
         })
         .collect()
 }
 
-pub fn reaper_version() -> String {
-    let ptr = Reaper::get().low().GetAppVersion();
-    if ptr.is_null() {
-        return String::new();
+fn subscribe(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
+    let names = event_names(params)?;
+    with_state(|state| {
+        let connection = state
+            .connections
+            .get_mut(&conn)
+            .ok_or_else(|| RpcError::internal("unknown connection"))?;
+        for name in names {
+            if connection.subscriptions.insert(name) {
+                connection.pending_initial.insert(name);
+            }
+        }
+        Ok(json!({ "events": connection.subscriptions }))
+    })
+}
+
+fn unsubscribe(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
+    let names = event_names(params)?;
+    with_state(|state| {
+        let connection = state
+            .connections
+            .get_mut(&conn)
+            .ok_or_else(|| RpcError::internal("unknown connection"))?;
+        for name in names {
+            connection.subscriptions.remove(name);
+            connection.pending_initial.remove(name);
+        }
+        Ok(json!({ "events": connection.subscriptions }))
+    })
+}
+
+fn debug_stats(params: &Params) -> Result<Value, RpcError> {
+    let reset = params.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    let mut tracker = lock(&TRACKER);
+    let tracker = tracker.get_or_insert_with(Tracker::default);
+    let stats = tracker.stats.to_json();
+    if reset {
+        tracker.stats = Default::default();
     }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    Ok(stats)
+}
+
+/// Sends changed state to subscribers, and current state to new subscribers.
+fn poll_events() {
+    let started = std::time::Instant::now();
+    let subscribers: Vec<(Sender<String>, Vec<(&'static str, bool)>)> = with_state(|state| {
+        state
+            .connections
+            .values_mut()
+            .filter(|connection| !connection.subscriptions.is_empty())
+            .map(|connection| {
+                let wanted = connection
+                    .subscriptions
+                    .iter()
+                    .map(|&event| (event, connection.pending_initial.contains(event)))
+                    .collect();
+                connection.pending_initial.clear();
+                (connection.outbox.clone(), wanted)
+            })
+            .collect()
+    });
+    let wanted: BTreeSet<&'static str> = subscribers
+        .iter()
+        .flat_map(|(_, events)| events.iter().map(|(event, _)| *event))
+        .collect();
+    let wanted: Vec<&'static str> = wanted.into_iter().collect();
+    let mut tracker = lock(&TRACKER);
+    let tracker = tracker.get_or_insert_with(Tracker::default);
+    // Still called with nothing wanted, so stale snapshots are forgotten.
+    let snapshots = tracker.poll(&wanted);
+    if wanted.is_empty() {
+        return;
+    }
+    // Serialize once per event, however many connections receive it.
+    let mut messages: HashMap<&'static str, String> = HashMap::new();
+    for (outbox, events) in subscribers {
+        for (event, initial) in events {
+            let snapshot = &snapshots[event];
+            if snapshot.changed || initial {
+                let message = messages.entry(event).or_insert_with(|| {
+                    let message = protocol::notification(event, snapshot.params.clone());
+                    tracker.stats.record_send(event, message.len());
+                    message
+                });
+                let _ = outbox.send(message.clone());
+            }
+        }
+    }
+    tracker.stats.record_tick(started.elapsed());
 }

@@ -44,6 +44,8 @@ methods are described in [`openrpc.json`](openrpc.json)
 | `action.register` | `{id, label}` | `{command, commandId}` |
 | `action.unregister` | `{id}` | `{}` |
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
+| `events.subscribe` | `{events: [name…]}` | `{events}`: all current subscriptions |
+| `events.unsubscribe` | `{events: [name…]}` | `{events}` |
 
 `initialize` must come first; only `rpc.discover` is allowed before it. When a
 registered action runs, the client that owns it receives a notification. These
@@ -54,6 +56,24 @@ OpenRPC document:
 {"jsonrpc": "2.0", "method": "action.triggered", "params": {"id": "hello", "command": "_REASOCK_demo_hello",
   "context": {"selectedItems": [{"path": "/…/tone.wav", "track": "tone", "position": 0, "length": 2}]}}}
 ```
+
+### Events (Tell)
+
+| Notification | When |
+| --- | --- |
+| `transport.changed` | play, pause, or record state changes |
+| `project.changed` | another tab becomes current, or the project is opened, saved, or becomes dirty |
+| `project.edited` | an undoable change happens; includes the undo description |
+| `items.selectionChanged` | the selection changes, or a selected item moves, is trimmed, or is renamed |
+| `tracks.selectionChanged` | the track selection changes, or a selected track is renamed or moved |
+
+A new subscriber gets the current state of each event right away, then only
+changes. ReaSock snapshots subscribed state once per timer tick (~30 Hz) and
+compares it with the previous snapshot, so a burst of changes arrives as one
+notification per tick. Polling also covers state REAPER has no callback for,
+such as item selection and project state. Items and tracks carry GUIDs, which
+stay stable across sessions. `examples/inspector.mjs` prints everything as it
+happens.
 
 Actions are named `_REASOCK_<client>_<id>` and are removed when their
 connection closes. Errors use the standard JSON-RPC codes, plus the
@@ -84,6 +104,12 @@ action conflict, -32012 unknown command, and so on).
 - **Modal dialogs pause the bridge.** The main-thread timer doesn't run while,
   for example, the update notification is open. Requests queue until it
   closes, so clients need timeouts and a "REAPER busy" state.
+- **Live edits and committed edits arrive separately.** While an item is being
+  dragged, `items.selectionChanged` streams its position (about 7 updates per
+  drag, thanks to the once-per-tick merging), and `project.edited` fires once
+  ("Move media items") when the mouse is released. Switching project tabs
+  updates every event at once, and the state-change count is per project.
+  Save As with copied media updates item paths to the copies.
 - `action.run` with 40004 (File: Quit REAPER) quits cleanly when the project
   has no unsaved changes, which makes automated test runs easy.
 - Registering an action takes about one timer tick (~30 ms). A full
@@ -92,7 +118,9 @@ action conflict, -32012 unknown command, and so on).
 ## Next
 
 - Close sockets cleanly when REAPER exits (clients currently see a reset).
-- Tell: register as a control surface (`csurf_inst`) and stream events.
+- Tell: more events (edit cursor, time selection, markers, tempo). Fast,
+  per-track changes such as volume and FX parameters probably belong on a
+  control surface (`csurf_inst`) rather than polling.
 - Ask: a general way to call REAPER API functions.
 - A ReaScript side (`ReaSock_Send` / `ReaSock_Poll`, in the style of
   reaspeech-lib) so Lua scripts can join.
