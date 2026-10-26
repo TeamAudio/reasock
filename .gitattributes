@@ -1,0 +1,5 @@
+# LF everywhere, including Windows checkouts: openrpc.json is compared
+# byte-for-byte with the generated document, and scripts ship as-is.
+* text=auto eol=lf
+*.woff2 binary
+*.png binary

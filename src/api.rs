@@ -775,7 +775,8 @@ mod tests {
             std::fs::write(path, &generated).unwrap();
             return;
         }
-        let published = include_str!("../openrpc.json");
+        // Tolerate a CRLF checkout; .gitattributes should prevent one.
+        let published = include_str!("../openrpc.json").replace("\r\n", "\n");
         assert!(
             generated == published,
             "openrpc.json is out of date; run REASOCK_UPDATE_OPENRPC=1 cargo test"
