@@ -165,6 +165,13 @@ draft):
 `scripts/release.py`, `scripts/reapack.py`, and `scripts/build_docs.py` run
 the same steps locally.
 
+Windows signing authenticates to Azure through a federated credential on the
+`techaudio-ci-signing` app registration, so no client secret is stored. GitHub
+sends this repo's OIDC subject in its ID-based form,
+`repo:TeamAudio@95143723/reasock@1433670296:environment:release`, and Azure
+needs that exact string. A credential written as
+`repo:TeamAudio/reasock:environment:release` fails with `AADSTS700213`.
+
 ## Adding to the protocol
 
 The protocol's types and methods live in Rust, and everything else is derived
