@@ -1,3 +1,5 @@
 target/
 .DS_Store
 test-projects/
+__pycache__/
+.venv/
