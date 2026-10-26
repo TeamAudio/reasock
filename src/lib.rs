@@ -1,6 +1,7 @@
 mod api;
 mod bridge;
 mod collection;
+mod config;
 mod discovery;
 mod docs;
 mod events;

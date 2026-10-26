@@ -4,6 +4,7 @@
 //! the main thread through the inbox channel; replies come back through a
 //! per-connection outbox that the connection thread drains between reads.
 
+use crate::config;
 use crate::log::log;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
@@ -13,6 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tungstenite::protocol::frame::coding::CloseCode;
 use tungstenite::protocol::CloseFrame;
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
 use tungstenite::{Error as WsError, Message};
 
 pub type ConnId = u64;
@@ -97,7 +100,24 @@ fn serve(conn: ConnId, stream: TcpStream, inbox: Sender<Inbound>) {
 
 fn serve_connection(conn: ConnId, stream: TcpStream, inbox: Sender<Inbound>) {
     let _ = stream.set_nodelay(true);
-    let mut ws = match tungstenite::accept(stream) {
+    let check_origin = |request: &Request, response: Response| {
+        let origin = request
+            .headers()
+            .get("origin")
+            .map(|value| value.to_str().unwrap_or("(unreadable)"));
+        if config::origin_allowed(origin, &config::load().allowed_origins) {
+            return Ok(response);
+        }
+        log!(
+            "conn {conn}: refused a connection from origin {}; add it to allowedOrigins in \
+             ~/.reasock/config.json to allow it",
+            origin.unwrap_or_default()
+        );
+        let mut refusal = ErrorResponse::new(Some("origin not allowed".into()));
+        *refusal.status_mut() = StatusCode::FORBIDDEN;
+        Err(refusal)
+    };
+    let mut ws = match tungstenite::accept_hdr(stream, check_origin) {
         Ok(ws) => ws,
         Err(error) => {
             log!("conn {conn}: handshake failed: {error}");

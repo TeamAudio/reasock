@@ -350,6 +350,9 @@ def build(document: dict) -> str:
 <code>port</code> it listens on. Connect a WebSocket to <code>{esc(server.get('url', 'ws://127.0.0.1:{port}'))}</code>
 and send JSON-RPC 2.0 text frames, starting with <code>initialize</code>:</p>
 <pre>{esc(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": info['version'], "client": {"name": "myapp"}}}, indent=2))}</pre>
+<p>Web pages are refused unless their origin is listed in <code>allowedOrigins</code> in
+<code>~/.reasock/config.json</code>, because any site could otherwise reach REAPER through
+<code>127.0.0.1</code>. Native clients send no <code>Origin</code> header and aren't affected.</p>
 <p>Then call methods, and <code>events.subscribe</code> to receive notifications. The machine-readable
 version of this reference is <code>openrpc.json</code>, next to this page, and <code>rpc.discover</code>
 returns it from a running REAPER.</p>

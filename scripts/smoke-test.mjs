@@ -6,7 +6,8 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +50,41 @@ async function rawSocket() {
 }
 
 const errorCode = (reply) => reply.error?.code;
+
+/** The HTTP status line ReaSock answers a WebSocket handshake with. */
+function handshakeStatus(origin) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1", () => {
+      socket.write(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n" +
+          "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+          (origin ? `Origin: ${origin}\r\n` : "") +
+          "\r\n",
+      );
+    });
+    socket.once("data", (data) => {
+      resolve(data.toString().split("\r\n")[0]);
+      socket.destroy();
+    });
+    socket.once("error", reject);
+    setTimeout(() => reject(new Error("no answer")), 2000);
+  });
+}
+
+await check("web pages are refused unless their origin is allowed", async () => {
+  assert.match(await handshakeStatus(null), / 101 /);
+  assert.match(await handshakeStatus("https://evil.example"), / 403 /);
+  // Allow one origin for a moment, restoring any existing config afterwards.
+  const config = join(homedir(), ".reasock", "config.json");
+  const previous = existsSync(config) ? readFileSync(config) : null;
+  try {
+    writeFileSync(config, JSON.stringify({ allowedOrigins: ["http://localhost:5173"] }));
+    assert.match(await handshakeStatus("http://localhost:5173"), / 101 /);
+    assert.match(await handshakeStatus("http://localhost:5174"), / 403 /);
+  } finally {
+    previous ? writeFileSync(config, previous) : rmSync(config, { force: true });
+  }
+});
 
 const raw = await rawSocket();
 

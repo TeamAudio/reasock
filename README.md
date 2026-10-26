@@ -192,6 +192,25 @@ Dispatch, the `initialize` gate, and `-32602` errors for malformed params come
 from the registry. Internally, ReaSock works with these structs and serializes
 them only when it sends something.
 
+## Security
+
+ReaSock listens on `127.0.0.1` only, so other machines can't reach it.
+
+Web pages are a different matter: a page can open a WebSocket to `127.0.0.1`
+from any site, and browsers don't apply cross-origin rules to WebSockets. So
+ReaSock refuses any handshake that carries an `Origin` header (which browsers
+always send, and pages can't forge) unless that origin is allowed in
+`~/.reasock/config.json`:
+
+```json
+{ "allowedOrigins": ["http://localhost:5173"] }
+```
+
+Native clients (Node, Python, an Electron app's main process) send no
+`Origin` and aren't affected. The file is re-read for every connection.
+Refused attempts are logged to `~/.reasock/reasock.log`. Don't allow `null`:
+sandboxed frames from any site send it.
+
 ## Spike findings (REAPER 7.78, macOS arm64)
 
 - **Actions can be registered at runtime.** They appear in the action list
