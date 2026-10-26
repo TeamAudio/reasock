@@ -1,6 +1,8 @@
 // An in-memory ReaSock for tests: a WebSocket stand-in wired to a tiny
 // JSON-RPC server that records what clients do.
 
+const EVENTS = new Set(["project.changed", "project.edited", "transport.changed", "items.selectionChanged", "tracks.selectionChanged"]);
+
 export class FakeReaSock {
   constructor({ token = "secret" } = {}) {
     this.token = token;
@@ -65,9 +67,13 @@ export class FakeReaSock {
         if (params.token !== this.token) return fail(-32003, "missing or wrong token");
         return ok({ protocolVersion: "0.3.0", server: { name: "reasock", version: "test" }, reaper: { version: "test" }, connection: this.sockets.length, capabilities: {} });
       case "action.register":
+        if (!/^[A-Za-z0-9]{1,32}$/.test(params.id)) return fail(-32602, "invalid action id");
         this.actions.add(params.id);
         return ok({ command: `_REASOCK_test_${params.id}`, commandId: 1 });
       case "events.subscribe":
+        if (params.events.some((event) => !EVENTS.has(typeof event === "string" ? event : event.event))) {
+          return fail(-32602, "unknown event");
+        }
         params.events.forEach((event) => this.subscriptions.add(typeof event === "string" ? event : event.event));
         return ok({ events: [...this.subscriptions] });
       case "events.unsubscribe":

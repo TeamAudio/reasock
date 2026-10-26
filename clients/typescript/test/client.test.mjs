@@ -31,6 +31,12 @@ test("a wrong token rejects with Unauthorized", async () => {
   );
 });
 
+test("a refused connection is closed", async () => {
+  const server = new FakeReaSock();
+  await assert.rejects(ReaSockClient.connect({ name: "test", endpoint: { port: 1, token: "wrong" }, WebSocket: server.WebSocket }));
+  assert.equal(server.socket.readyState, 3);
+});
+
 test("calls resolve with results and reject with RpcError", async () => {
   const server = new FakeReaSock();
   const client = await connect(server);
@@ -126,4 +132,27 @@ test("close() stops reconnecting", async () => {
   client.close();
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(server.sockets.length, 1);
+});
+
+test("actions and subscriptions REAPER refused aren't restored on reconnect", async () => {
+  const server = new FakeReaSock();
+  const client = await connect(server, { reconnect: { minDelayMs: 10 } });
+  await client.registerAction("hello", "Hello", () => {});
+  await assert.rejects(client.registerAction("not valid!", "Bad", () => {}), RpcError);
+  await client.subscribe("transport.changed");
+  await assert.rejects(client.subscribe("project.changed", "no.such.event"), RpcError);
+  const changes = [];
+  client.onConnectionChange((connected) => changes.push(connected));
+
+  server.actions.clear();
+  server.subscriptions.clear();
+  server.calls.length = 0;
+  server.socket.close();
+  await until(() => changes.length === 2);
+
+  assert.deepEqual(changes, [false, true]);
+  assert.deepEqual(server.calls.map((call) => call.method), ["initialize", "action.register", "events.subscribe"]);
+  assert.deepEqual([...server.actions], ["hello"]);
+  assert.deepEqual([...server.subscriptions], ["transport.changed"]);
+  client.close();
 });

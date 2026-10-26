@@ -125,10 +125,12 @@ export class ReaSockClient {
    * that unsubscribes them.
    */
   async subscribe(...subscriptions: Subscription[]): Promise<() => Promise<void>> {
+    // Remembered only once REAPER accepts them: one it refused would fail
+    // every reconnect.
+    await this.call("events.subscribe", { events: subscriptions });
     for (const subscription of subscriptions) {
       this.#subscriptions.set(eventOf(subscription), subscription);
     }
-    await this.call("events.subscribe", { events: subscriptions });
     return async () => {
       const events = subscriptions.map(eventOf);
       events.forEach((event) => this.#subscriptions.delete(event));
@@ -141,8 +143,9 @@ export class ReaSockClient {
    * runs (restored after a reconnect, so hotkeys keep working).
    */
   async registerAction(id: string, label: string, handler: Handler<ActionTriggered>): Promise<RegisteredAction> {
+    const registered = await this.call("action.register", { id, label });
     this.#actions.set(id, { label, handler });
-    return this.call("action.register", { id, label });
+    return registered;
   }
 
   /** Closes the connection for good: no reconnecting. */
@@ -170,16 +173,23 @@ export class ReaSockClient {
     const client = this.#options.version
       ? { name: this.#options.name, version: this.#options.version }
       : { name: this.#options.name };
-    this.session = await this.call("initialize", {
-      protocolVersion: PROTOCOL_VERSION,
-      client,
-      token: endpoint.token,
-    });
-    for (const [id, { label }] of this.#actions) {
-      await this.call("action.register", { id, label });
-    }
-    if (this.#subscriptions.size > 0) {
-      await this.call("events.subscribe", { events: [...this.#subscriptions.values()] });
+    try {
+      this.session = await this.call("initialize", {
+        protocolVersion: PROTOCOL_VERSION,
+        client,
+        token: endpoint.token,
+      });
+      for (const [id, { label }] of this.#actions) {
+        await this.call("action.register", { id, label });
+      }
+      if (this.#subscriptions.size > 0) {
+        await this.call("events.subscribe", { events: [...this.#subscriptions.values()] });
+      }
+    } catch (error) {
+      // Refused (a wrong token, say): don't leave the socket open.
+      this.#socket = null;
+      socket.close();
+      throw error;
     }
   }
 
@@ -244,8 +254,6 @@ export class ReaSockClient {
         this.#connectionHandlers.forEach((handler) => handler(true));
         return;
       } catch {
-        this.#socket?.close();
-        this.#socket = null;
         delay = Math.min(delay * 2, settings.maxDelayMs ?? 10_000);
       }
     }

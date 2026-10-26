@@ -1,0 +1,1 @@
+- `@techaudio/reasock`: a refused `connect()` (a wrong token, say) closes its connection, so a Node script exits instead of hanging. And an action or subscription REAPER refused is no longer retried on every reconnect, where it failed each time and stopped the client from ever reconnecting.
