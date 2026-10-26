@@ -1,6 +1,6 @@
 {
   "name": "@techaudio/reasock",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Typed client for ReaSock, the WebSocket bridge between REAPER and other programs",
   "license": "MIT",
   "author": "Tech Audio (https://techaud.io)",

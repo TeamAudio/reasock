@@ -1,1 +1,0 @@
-- `@techaudio/reasock` on npm: a typed TypeScript client (every method, param, result, and event typed from the OpenRPC description), with reconnect that restores actions and subscriptions after REAPER restarts, and a browser build.
