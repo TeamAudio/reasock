@@ -1,0 +1,202 @@
+name: Release (signed draft)
+
+# Runs on a tag: started by cut-release.yml, or by hand with
+#   gh workflow run release.yml --ref vX.Y.Z
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: read
+
+env:
+  APPLE_IDENTITY: "Developer ID Application: teamaud.io LLC (JJSFJ52FQ5)"
+  WINDOWS_PUBLISHER: TEAMAUD.IO LLC
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag matches Cargo.toml
+        id: version
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_TYPE" == tag ]] || { echo "::error::Run this on a tag (vX.Y.Z)"; exit 1; }
+          version="$(python3 scripts/release.py version | sed -n 's/^version=//p')"
+          [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml ($version)"; exit 1; }
+          [[ -f "releases/changes-$version.md" ]] || { echo "::error::releases/changes-$version.md is missing"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ github.ref_name }}
+
+  sign-macos:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: reasock-darwin*
+          path: in
+          merge-multiple: true
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+      - name: Sign
+        run: |
+          set -euo pipefail
+          for file in in/*.dylib; do
+            codesign --force --timestamp --options runtime --sign "$APPLE_IDENTITY" "$file"
+            codesign --verify --strict --verbose=2 "$file"
+            codesign -dv "$file" 2>&1 | grep -E "^(Authority|TeamIdentifier|Timestamp)="
+          done
+
+      - name: Notarize
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$ASC_API_KEY_P8" > "$key"
+          ditto -c -k --keepParent in "$RUNNER_TEMP/reasock-macos.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/reasock-macos.zip" --key "$key" --key-id "$ASC_API_KEY_ID" \
+            --issuer "$ASC_API_ISSUER_ID" --wait --output-format json | tee "$RUNNER_TEMP/notary.json"
+          status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/notary.json")"
+          if [[ "$status" != Accepted ]]; then
+            id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/notary.json")"
+            xcrun notarytool log "$id" --key "$key" --key-id "$ASC_API_KEY_ID" --issuer "$ASC_API_ISSUER_ID" || true
+            echo "::error::Notarization finished with status $status"
+            exit 1
+          fi
+          # Libraries can't be stapled; Gatekeeper looks the ticket up online.
+          echo "### macOS: signed and notarized ($status)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-darwin
+          path: in/*.dylib
+          if-no-files-found: error
+
+  sign-windows:
+    needs: build
+    runs-on: windows-latest
+    # The Azure federated credential trusts only this environment, which
+    # only admits v* tags.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: reasock-win64
+          path: in
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Sign with Azure Artifact Signing
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: TechAudio
+          certificate-profile-name: TechAudio
+          files-folder: ${{ github.workspace }}\in
+          files-folder-filter: dll
+          description: ReaSock
+          description-url: https://github.com/TeamAudio/reasock
+
+      - name: Verify signature
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem in -Filter *.dll) {
+            $sig = Get-AuthenticodeSignature $file.FullName
+            $publisher = if ($sig.SignerCertificate) { $sig.SignerCertificate.GetNameInfo('SimpleName', $false) } else { '' }
+            if ($sig.Status -ne 'Valid' -or $publisher -ne $env:WINDOWS_PUBLISHER) {
+              Write-Host "::error::$($file.Name): $($sig.Status) ($publisher)"
+              exit 1
+            }
+            "### Windows: $($file.Name) signed by $publisher" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-win64
+          path: in/*.dll
+          if-no-files-found: error
+
+  draft:
+    needs: [check, sign-macos, sign-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Signed binaries replace the unsigned ones; Linux and docs come from the build.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: signed-*
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: reasock-linux*
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: reasock-docs
+          path: artifacts/reasock-docs
+
+      - name: Stage release assets
+        run: python3 scripts/reapack.py stage --artifacts artifacts --out release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null | grep -q true; then
+            echo "Draft $tag exists; replacing its assets"
+            gh release upload "$tag" release/* --clobber
+          elif gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::$tag is already published; refusing to replace its assets"
+            exit 1
+          else
+            gh release create "$tag" release/* --draft --verify-tag \
+              --title "ReaSock $VERSION" --notes-file "releases/changes-$VERSION.md"
+          fi
+          echo "### Draft release $tag is ready to review and publish" >> "$GITHUB_STEP_SUMMARY"

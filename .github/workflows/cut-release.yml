@@ -1,0 +1,41 @@
+name: Cut release (tag)
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cut:
+    if: github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'release-prep')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: python3 scripts/release.py version
+
+      - name: Tag and start the release build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          # A tag pushed with GITHUB_TOKEN triggers no workflows, but a
+          # dispatch does. Running on the tag lets the release job use the
+          # `release` environment, which only admits v* tags.
+          gh workflow run release.yml --ref "$TAG"
+          echo "Started the release build for $TAG"

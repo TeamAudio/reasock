@@ -1,0 +1,48 @@
+name: Publish release to techaud.io
+
+on:
+  release:
+    # 'released' only, not 'edited': publishing a draft emits both, which
+    # raced two website PRs for XY Pad.
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: Release tag (vX.Y.Z)
+        required: true
+      release_body:
+        description: Release notes (markdown)
+        required: true
+
+# Pushes and PRs happen in techaudio-web with the service token.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout techaudio-web
+        uses: actions/checkout@v7
+        with:
+          repository: TeamAudio/techaudio-web
+          # Pinned: a selectable ref would let a dispatcher run arbitrary
+          # action code with the service token.
+          ref: main
+          token: ${{ secrets.PUBLISH_RELEASE_SERVICE_TOKEN }}
+          persist-credentials: false
+          path: techaudio-web
+
+      - name: Publish release notes
+        uses: ./techaudio-web/.github/actions/publish-release
+        with:
+          project_id: reasock
+          project_name: ReaSock
+          project_repository: ${{ github.repository }}
+          version_tag: ${{ inputs.version_tag || github.event.release.tag_name }}
+          release_body: ${{ inputs.release_body || github.event.release.body }}
+          # ReaSock's reference ships inside the package rather than as a
+          # website manual.
+          publish_manual: "false"
+          service_token: ${{ secrets.PUBLISH_RELEASE_SERVICE_TOKEN }}

@@ -1,0 +1,57 @@
+name: Prepare release (PR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (default: bump from releases/pending)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Bump version and compile notes
+        id: prep
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python3 scripts/release.py prepare ${VERSION:+--version "$VERSION"}
+
+      - name: Open release prep PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.prep.outputs.version }}
+          LEVEL: ${{ steps.prep.outputs.bump_level }}
+          CHANGES: ${{ steps.prep.outputs.changes_file }}
+        run: |
+          set -euo pipefail
+          branch="release-prep/v${VERSION}-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A Cargo.toml Cargo.lock releases
+          git commit -m "Release prep v${VERSION}"
+          git push origin "$branch"
+
+          gh label create release-prep --description "Automated release prep PR" --color 5319e7 --force
+          body="$(printf 'Automated release prep.\n\n- Version: v%s\n- Bump: %s\n- Notes: `%s`\n\nMerging this tags v%s and builds a signed draft release.\n' \
+            "$VERSION" "$LEVEL" "$CHANGES" "$VERSION")"
+          # REST rather than `gh pr create`, which can fail for the Actions bot.
+          number="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f title="Release prep v${VERSION}" -f head="$branch" -f base=main -f body="$body" --jq .number)"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${number}/labels" -f "labels[]=release-prep" >/dev/null
+          echo "Opened https://github.com/${GITHUB_REPOSITORY}/pull/${number}"

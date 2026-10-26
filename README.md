@@ -144,6 +144,27 @@ reaper.ReaSock_Close(conn)
 It uses `examples/lua/json.lua` (rxi, MIT), since REAPER's Lua has no JSON
 library.
 
+## Releasing
+
+Releases follow XY Pad's flow, with two human gates (a PR, then publishing a
+draft):
+
+1. Describe changes as they land in `releases/pending/<name>.{patch,minor,major}.md`.
+2. Run **Prepare release** (Actions tab). It bumps the version in `Cargo.toml`
+   from the largest pending level (or takes an explicit version), compiles
+   `releases/changes-X.Y.Z.md`, and opens a `release-prep` PR.
+3. Merging that PR tags `vX.Y.Z` and starts **Release** on the tag: it builds
+   all five platforms, signs and notarizes the macOS binaries (Developer ID),
+   signs the Windows DLL (Azure Artifact Signing, through the `release`
+   environment's federated credential), and attaches everything to a
+   **draft** GitHub release.
+4. Publishing the draft opens a PR in `TeamAudio/reascripts` with
+   `Extensions/ReaSock.ext` and the updated index, and a PR in
+   `TeamAudio/techaudio-web` with the release notes.
+
+`scripts/release.py`, `scripts/reapack.py`, and `scripts/build_docs.py` run
+the same steps locally.
+
 ## Adding to the protocol
 
 The protocol's types and methods live in Rust, and everything else is derived

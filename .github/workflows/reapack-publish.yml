@@ -1,0 +1,68 @@
+name: Publish to ReaPack (PR to reascripts)
+
+on:
+  release:
+    # 'released' fires once when a release goes live (including a prerelease
+    # promoted to a full release); drafts and prereleases never fire it.
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/checkout@v7
+        with:
+          repository: TeamAudio/reascripts
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.REASCRIPTS_PUBLISH_TOKEN }}
+          path: reascripts
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+
+      - name: Install reapack-index (pandoc renders @about)
+        run: |
+          sudo apt-get update && sudo apt-get install -y pandoc
+          gem install reapack-index
+
+      - name: Write the package and update the index
+        run: |
+          set -euo pipefail
+          python3 scripts/reapack.py descriptor --tag "$TAG" --reascripts reascripts
+          cd reascripts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "reapack/reasock/${TAG}-${GITHUB_RUN_ID}"
+          git add Extensions/ReaSock.ext
+          git commit -m "ReaPack: ReaSock ${TAG}"
+          # The indexer makes its own commit, as elsewhere in reascripts.
+          reapack-index --commit --scan "$(git rev-parse HEAD)"
+
+      - name: Open the reascripts PR
+        env:
+          GH_TOKEN: ${{ secrets.REASCRIPTS_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd reascripts
+          git push origin HEAD
+          gh label create reapack --description "ReaPack publish" --color 0e8a16 --force
+          gh label create reasock --description "ReaSock" --color 1d76db --force
+          gh pr create --base main --title "ReaPack: ReaSock ${TAG}" \
+            --body "Automated ReaPack publish for [ReaSock ${TAG}](https://github.com/TeamAudio/reasock/releases/tag/${TAG})." \
+            --label reapack --label reasock
