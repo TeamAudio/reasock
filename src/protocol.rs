@@ -164,24 +164,20 @@ fn error_response(id: Value, error: RpcError) -> Value {
     })
 }
 
-pub fn notification(method: &str, params: Value) -> String {
-    notification_ref(method, &params)
-}
-
-/// Serializes a notification without copying `params`.
-pub fn notification_ref(method: &str, params: &Value) -> String {
+/// Serializes a server-to-client notification.
+pub fn notification<T: serde::Serialize + ?Sized>(method: &str, params: &T) -> String {
     #[derive(serde::Serialize)]
-    struct Notification<'a> {
+    struct Notification<'a, T: ?Sized> {
         jsonrpc: &'static str,
         method: &'a str,
-        params: &'a Value,
+        params: &'a T,
     }
     serde_json::to_string(&Notification {
         jsonrpc: "2.0",
         method,
         params,
     })
-    .expect("JSON values always serialize")
+    .expect("protocol types always serialize")
 }
 
 #[cfg(test)]

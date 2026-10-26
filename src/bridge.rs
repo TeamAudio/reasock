@@ -10,6 +10,7 @@ use crate::log::log;
 use crate::model;
 use crate::protocol::{self, Params, RpcError};
 use crate::server::{ConnId, Inbound};
+use crate::types::{ActionContext, ItemsFound, ItemsPage, TracksFound, TracksPage};
 use reaper_medium::{
     ActionValueChange, CommandId, HookCommand, HookCommand2, ProjectContext, Reaper,
     ReaperSession, SectionContext, WindowContext,
@@ -177,20 +178,24 @@ fn call(conn: ConnId, method: &str, params: Params) -> Result<Value, RpcError> {
         "items.listSelected" => {
             let (offset, limit) = page(&params)?;
             let (count, items) = model::selected_items_page(offset, limit);
-            Ok(json!({ "count": count, "offset": offset, "items": items }))
+            result(ItemsPage { count, offset, items })
         }
-        "items.get" => Ok(json!({ "items": model::items_by_guid(&guids(&params)?) })),
+        "items.get" => result(ItemsFound { items: model::items_by_guid(&guids(&params)?) }),
         "tracks.listSelected" => {
             let (offset, limit) = page(&params)?;
             let (count, tracks) = model::selected_tracks_page(offset, limit);
-            Ok(json!({ "count": count, "offset": offset, "tracks": tracks }))
+            result(TracksPage { count, offset, tracks })
         }
-        "tracks.get" => Ok(json!({ "tracks": model::tracks_by_guid(&guids(&params)?) })),
+        "tracks.get" => result(TracksFound { tracks: model::tracks_by_guid(&guids(&params)?) }),
         "events.subscribe" => subscribe(conn, &params),
         "events.unsubscribe" => unsubscribe(conn, &params),
         "debug.stats" => debug_stats(&params),
         other => Err(RpcError::internal(format!("{other} is listed but not implemented"))),
     }
+}
+
+fn result(value: impl serde::Serialize) -> Result<Value, RpcError> {
+    serde_json::to_value(value).map_err(|error| RpcError::internal(error.to_string()))
 }
 
 /// Command names may only contain A-Z, a-z and 0-9 (plus our underscores).
@@ -406,7 +411,7 @@ fn dispatch(command: CommandId) -> bool {
     };
     let message = protocol::notification(
         "action.triggered",
-        json!({
+        &json!({
             "id": id,
             "command": format!("_{command_name}"),
             "context": action_context(),
@@ -417,10 +422,13 @@ fn dispatch(command: CommandId) -> bool {
 }
 
 /// Selected items when an action runs, capped like collection notifications.
-fn action_context() -> Value {
+fn action_context() -> ActionContext {
     let (count, items) = model::selected_items_page(0, collection::DEFAULT_LIMIT);
-    let truncated = count > items.len();
-    json!({ "selectedItems": items, "selectedItemCount": count, "truncated": truncated })
+    ActionContext {
+        truncated: count > items.len(),
+        selected_items: items,
+        selected_item_count: count,
+    }
 }
 
 /// `offset` and `limit` for paged Ask methods.
@@ -490,7 +498,7 @@ fn subscriptions(params: &Params) -> Result<Vec<(&'static str, Options)>, RpcErr
                 _ => return Err(unknown(entry)),
             };
             let event = name.as_str().and_then(events::lookup).ok_or_else(|| unknown(name))?;
-            if options.is_some() && events::collection_field(event).is_none() {
+            if options.is_some() && !events::is_collection(event) {
                 return Err(RpcError::invalid_params(format!("{event} takes no options")));
             }
             let options = Options::parse(options)
@@ -586,10 +594,10 @@ fn poll_events() {
             }
             let key = (event, initial, options);
             if !messages.contains_key(&key) {
-                let Some(params) = tracker.render(event, initial, options) else {
+                let Some(message) = tracker.message(event, initial, options) else {
                     continue;
                 };
-                messages.insert(key, protocol::notification(event, params));
+                messages.insert(key, message);
             }
             let message = &messages[&key];
             tracker.stats.record_send(event, message.len());

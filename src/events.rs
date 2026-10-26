@@ -10,8 +10,10 @@
 //! Selections are collections: their notifications describe what changed and
 //! stay within each subscriber's limit (see `collection`).
 
-use crate::collection::{self, Collection, Delta, Options};
+use crate::collection::{Collection, Delta, Options};
 use crate::model;
+use crate::protocol;
+use crate::types::{Item, ItemsChange, Project, ProjectEdit, Track, TracksChange, Transport};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -29,13 +31,9 @@ pub fn lookup(name: &str) -> Option<&'static str> {
     EVENTS.iter().copied().find(|event| *event == name)
 }
 
-/// For collection events, the field that carries full entries.
-pub fn collection_field(event: &str) -> Option<&'static str> {
-    match event {
-        "items.selectionChanged" => Some("items"),
-        "tracks.selectionChanged" => Some("tracks"),
-        _ => None,
-    }
+/// Whether the event is about a collection, and so accepts `Options`.
+pub fn is_collection(event: &str) -> bool {
+    matches!(event, "items.selectionChanged" | "tracks.selectionChanged")
 }
 
 /// Fills `out` with a cheap fingerprint of the event's state, if it has one.
@@ -48,19 +46,55 @@ fn fingerprint(event: &str, out: &mut Vec<u64>) -> bool {
     true
 }
 
+/// The current state behind one event.
 enum State {
-    Plain(Value),
-    Collection(Collection),
+    Transport(Transport),
+    Project(Project),
+    ProjectEdit(ProjectEdit),
+    Items(Collection<Item>),
+    Tracks(Collection<Track>),
 }
 
-fn snapshot(event: &str) -> State {
-    match event {
-        "transport.changed" => State::Plain(model::transport()),
-        "project.changed" => State::Plain(model::project()),
-        "project.edited" => State::Plain(model::project_edit()),
-        "items.selectionChanged" => State::Collection(Collection::new(model::selected_items())),
-        "tracks.selectionChanged" => State::Collection(Collection::new(model::selected_tracks())),
-        other => unreachable!("unknown event {other}"),
+impl State {
+    fn snapshot(event: &str) -> State {
+        match event {
+            "transport.changed" => State::Transport(model::transport()),
+            "project.changed" => State::Project(model::project()),
+            "project.edited" => State::ProjectEdit(model::project_edit()),
+            "items.selectionChanged" => State::Items(Collection::new(model::selected_items())),
+            "tracks.selectionChanged" => State::Tracks(Collection::new(model::selected_tracks())),
+            other => unreachable!("unknown event {other}"),
+        }
+    }
+
+    /// Whether `self` differs from `older`, and for collections, how.
+    fn compare(&self, older: Option<&State>) -> (bool, Option<Delta>) {
+        let collection_delta = |delta: Delta| (!delta.is_empty(), Some(delta));
+        match (older, self) {
+            (Some(State::Transport(old)), State::Transport(new)) => (old != new, None),
+            (Some(State::Project(old)), State::Project(new)) => (old != new, None),
+            (Some(State::ProjectEdit(old)), State::ProjectEdit(new)) => (old != new, None),
+            (Some(State::Items(old)), State::Items(new)) => collection_delta(old.diff(new)),
+            (Some(State::Tracks(old)), State::Tracks(new)) => collection_delta(old.diff(new)),
+            _ => (true, None),
+        }
+    }
+
+    /// The notification for one subscriber, serialized.
+    fn message(&self, event: &str, delta: Option<&Delta>, options: Options) -> String {
+        match self {
+            State::Transport(params) => protocol::notification(event, params),
+            State::Project(params) => protocol::notification(event, params),
+            State::ProjectEdit(params) => protocol::notification(event, params),
+            State::Items(items) => {
+                let params: ItemsChange = items.render(delta, options).into();
+                protocol::notification(event, &params)
+            }
+            State::Tracks(tracks) => {
+                let params: TracksChange = tracks.render(delta, options).into();
+                protocol::notification(event, &params)
+            }
+        }
     }
 }
 
@@ -177,16 +211,9 @@ impl Tracker {
                 }
             }
 
-            let state = snapshot(event);
+            let state = State::snapshot(event);
             let snapshotted = Instant::now();
-            let (is_new, delta) = match (previous.map(|watched| &watched.state), &state) {
-                (Some(State::Plain(old)), State::Plain(new)) => (old != new, None),
-                (Some(State::Collection(old)), State::Collection(new)) => {
-                    let delta = old.diff(new);
-                    (!delta.is_empty(), Some(delta))
-                }
-                _ => (true, None),
-            };
+            let (is_new, delta) = state.compare(previous.map(|watched| &watched.state));
             stats.snapshot.record(snapshotted - checked);
             stats.compare.record(snapshotted.elapsed());
             let fingerprint = has_fingerprint.then(|| self.scratch.clone());
@@ -203,18 +230,12 @@ impl Tracker {
         changed
     }
 
-    /// Notification params for a polled event. `initial` is a subscriber's
-    /// first notification; `options` apply to collection events.
-    pub fn render(&self, event: &str, initial: bool, options: Options) -> Option<Value> {
+    /// The serialized notification for a polled event. `initial` is a
+    /// subscriber's first notification; `options` apply to collection events.
+    pub fn message(&self, event: &str, initial: bool, options: Options) -> Option<String> {
         let watched = self.last.get(event)?;
-        Some(match &watched.state {
-            State::Plain(params) => params.clone(),
-            State::Collection(current) => {
-                let field = collection_field(event).expect("collection events have a field");
-                let delta = if initial { None } else { watched.delta.as_ref() };
-                collection::render(field, current, delta, options)
-            }
-        })
+        let delta = if initial { None } else { watched.delta.as_ref() };
+        Some(watched.state.message(event, delta, options))
     }
 }
 

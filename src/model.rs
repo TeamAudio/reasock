@@ -1,13 +1,13 @@
-//! Snapshots of REAPER state as JSON. Main thread only.
+//! Snapshots of REAPER state as protocol types. Main thread only.
 //!
 //! Items and tracks carry their GUIDs, which stay stable across sessions,
 //! unlike REAPER's pointers and indexes.
 
+use crate::types::{Item, Project, ProjectEdit, Track, Transport};
 use reaper_medium::{
-    MasterTrackBehavior, MediaItem, MediaTrack, ItemAttributeKey, ProjectContext, ProjectRef,
+    ItemAttributeKey, MasterTrackBehavior, MediaItem, MediaTrack, ProjectContext, ProjectRef,
     Reaper, TrackAttributeKey,
 };
-use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 
@@ -29,11 +29,12 @@ pub fn reaper_version() -> String {
 
 /// # Safety
 /// `track` must be a valid track in the current project.
-unsafe fn track_guid(track: MediaTrack) -> Option<String> {
+unsafe fn track_guid(track: MediaTrack) -> String {
     let reaper = Reaper::get();
     let guid = reaper.low().GetTrackGUID(track.as_ptr());
     guid.as_ref()
         .map(|guid| reaper.guid_to_string(guid).to_str().to_owned())
+        .unwrap_or_default()
 }
 
 /// # Safety
@@ -44,20 +45,20 @@ unsafe fn track_name(track: MediaTrack) -> Option<String> {
 
 /// # Safety
 /// `track` must be a valid track in the current project.
-unsafe fn track_json(track: MediaTrack) -> Value {
+unsafe fn track_info(track: MediaTrack) -> Track {
     let number = Reaper::get().get_media_track_info_value(track, TrackAttributeKey::TrackNumber);
-    json!({
-        "guid": track_guid(track),
-        "name": track_name(track),
-        "number": number as i64,
-    })
+    Track {
+        guid: track_guid(track),
+        name: track_name(track),
+        number: number as i64,
+    }
 }
 
 /// Per-snapshot scratch space: a reusable path buffer, and track details
 /// looked up once per track rather than once per item.
 struct ItemScratch {
     path: Vec<c_char>,
-    tracks: HashMap<MediaTrack, (Option<String>, Option<String>)>,
+    tracks: HashMap<MediaTrack, (Option<String>, String)>,
 }
 
 impl ItemScratch {
@@ -70,7 +71,7 @@ impl ItemScratch {
 
     /// # Safety
     /// `track` must be a valid track in the current project.
-    unsafe fn track(&mut self, track: MediaTrack) -> &(Option<String>, Option<String>) {
+    unsafe fn track(&mut self, track: MediaTrack) -> &(Option<String>, String) {
         self.tracks
             .entry(track)
             .or_insert_with(|| (track_name(track), track_guid(track)))
@@ -79,7 +80,7 @@ impl ItemScratch {
 
 /// # Safety
 /// `item` must be a valid item in the current project.
-unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
+unsafe fn item_info(item: MediaItem, scratch: &mut ItemScratch) -> Item {
     let reaper = Reaper::get();
     let guid = item_guid(item);
     let take = reaper.get_active_take(item);
@@ -100,27 +101,30 @@ unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
         })
         .filter(|path| !path.is_empty());
     let (track, track_guid) = match reaper.get_media_item_track(item) {
-        Some(track) => scratch.track(track).clone(),
+        Some(track) => {
+            let (name, guid) = scratch.track(track).clone();
+            (name, Some(guid))
+        }
         None => (None, None),
     };
-    json!({
-        "guid": guid,
-        "name": name,
-        "path": path,
-        "track": track,
-        "trackGuid": track_guid,
-        "position": reaper.get_media_item_info_value(item, ItemAttributeKey::Position),
-        "length": reaper.get_media_item_info_value(item, ItemAttributeKey::Length),
-    })
+    Item {
+        guid,
+        name,
+        path,
+        track,
+        track_guid,
+        position: reaper.get_media_item_info_value(item, ItemAttributeKey::Position),
+        length: reaper.get_media_item_info_value(item, ItemAttributeKey::Length),
+    }
 }
 
-pub fn selected_items() -> Vec<Value> {
+pub fn selected_items() -> Vec<Item> {
     selected_items_page(0, usize::MAX).1
 }
 
 /// The total number of selected items, and up to `limit` of them starting at
 /// `offset`, in selection order.
-pub fn selected_items_page(offset: usize, limit: usize) -> (usize, Vec<Value>) {
+pub fn selected_items_page(offset: usize, limit: usize) -> (usize, Vec<Item>) {
     let reaper = Reaper::get();
     let count = reaper.count_selected_media_items(CURRENT);
     let mut scratch = ItemScratch::new();
@@ -128,7 +132,7 @@ pub fn selected_items_page(offset: usize, limit: usize) -> (usize, Vec<Value>) {
         .skip(offset)
         .take(limit)
         .filter_map(|index| reaper.get_selected_media_item(CURRENT, index))
-        .map(|item| unsafe { item_json(item, &mut scratch) })
+        .map(|item| unsafe { item_info(item, &mut scratch) })
         .collect();
     (count as usize, items)
 }
@@ -153,7 +157,7 @@ fn guid_positions(guids: &[String]) -> HashMap<String, Vec<usize>> {
 }
 
 /// Looks up items in the current project by GUID; `None` where not found.
-pub fn items_by_guid(guids: &[String]) -> Vec<Option<Value>> {
+pub fn items_by_guid(guids: &[String]) -> Vec<Option<Item>> {
     let reaper = Reaper::get();
     let positions = guid_positions(guids);
     let mut found = vec![None; guids.len()];
@@ -164,9 +168,9 @@ pub fn items_by_guid(guids: &[String]) -> Vec<Option<Value>> {
         };
         let guid = unsafe { item_guid(item) }.to_ascii_uppercase();
         if let Some(at) = positions.get(&guid) {
-            let json = unsafe { item_json(item, &mut scratch) };
+            let info = unsafe { item_info(item, &mut scratch) };
             for &position in at {
-                found[position] = Some(json.clone());
+                found[position] = Some(info.clone());
             }
         }
     }
@@ -218,12 +222,12 @@ pub fn selected_tracks_fingerprint(out: &mut Vec<u64>) {
     }
 }
 
-pub fn selected_tracks() -> Vec<Value> {
+pub fn selected_tracks() -> Vec<Track> {
     selected_tracks_page(0, usize::MAX).1
 }
 
 /// Like `selected_items_page`, for tracks. The master track is never included.
-pub fn selected_tracks_page(offset: usize, limit: usize) -> (usize, Vec<Value>) {
+pub fn selected_tracks_page(offset: usize, limit: usize) -> (usize, Vec<Track>) {
     let reaper = Reaper::get();
     let master = MasterTrackBehavior::ExcludeMasterTrack;
     let count = reaper.count_selected_tracks_2(CURRENT, master);
@@ -231,13 +235,13 @@ pub fn selected_tracks_page(offset: usize, limit: usize) -> (usize, Vec<Value>) 
         .skip(offset)
         .take(limit)
         .filter_map(|index| reaper.get_selected_track_2(CURRENT, index, master))
-        .map(|track| unsafe { track_json(track) })
+        .map(|track| unsafe { track_info(track) })
         .collect();
     (count as usize, tracks)
 }
 
 /// Looks up tracks in the current project by GUID; `None` where not found.
-pub fn tracks_by_guid(guids: &[String]) -> Vec<Option<Value>> {
+pub fn tracks_by_guid(guids: &[String]) -> Vec<Option<Track>> {
     let reaper = Reaper::get();
     let positions = guid_positions(guids);
     let mut found = vec![None; guids.len()];
@@ -245,29 +249,27 @@ pub fn tracks_by_guid(guids: &[String]) -> Vec<Option<Value>> {
         let Some(track) = reaper.get_track(CURRENT, index) else {
             continue;
         };
-        let Some(guid) = (unsafe { track_guid(track) }) else {
-            continue;
-        };
+        let guid = unsafe { track_guid(track) };
         if let Some(at) = positions.get(&guid.to_ascii_uppercase()) {
-            let json = unsafe { track_json(track) };
+            let info = unsafe { track_info(track) };
             for &position in at {
-                found[position] = Some(json.clone());
+                found[position] = Some(info.clone());
             }
         }
     }
     found
 }
 
-pub fn transport() -> Value {
+pub fn transport() -> Transport {
     let state = Reaper::get().get_play_state_ex(CURRENT);
-    json!({
-        "playing": state.is_playing,
-        "paused": state.is_paused,
-        "recording": state.is_recording,
-    })
+    Transport {
+        playing: state.is_playing,
+        paused: state.is_paused,
+        recording: state.is_recording,
+    }
 }
 
-pub fn project() -> Value {
+pub fn project() -> Project {
     let reaper = Reaper::get();
     let current = reaper.enum_projects(ProjectRef::Current, 4096);
     let tab = current.as_ref().and_then(|current| {
@@ -276,18 +278,18 @@ pub fn project() -> Value {
             .position(|tab| tab.project == current.project)
     });
     let path = current.and_then(|current| current.file_path);
-    json!({
-        "tab": tab,
-        "name": path.as_ref().and_then(|path| path.file_stem()),
-        "path": path.as_ref().map(|path| path.as_str()),
-        "dirty": reaper.is_project_dirty(CURRENT),
-    })
+    Project {
+        tab,
+        name: path.as_ref().and_then(|path| path.file_stem()).map(str::to_owned),
+        path: path.map(|path| path.into_string()),
+        dirty: reaper.is_project_dirty(CURRENT),
+    }
 }
 
-pub fn project_edit() -> Value {
+pub fn project_edit() -> ProjectEdit {
     let reaper = Reaper::get();
-    json!({
-        "stateChangeCount": reaper.get_project_state_change_count(CURRENT),
-        "lastUndo": reaper.undo_can_undo_2(CURRENT, |description| description.to_str().to_owned()),
-    })
+    ProjectEdit {
+        state_change_count: reaper.get_project_state_change_count(CURRENT),
+        last_undo: reaper.undo_can_undo_2(CURRENT, |description| description.to_str().to_owned()),
+    }
 }

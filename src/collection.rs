@@ -5,7 +5,8 @@
 //! entries as the subscriber's `limit` allows. Anything left out is flagged
 //! with `truncated`, and the client catches up through Ask.
 
-use serde_json::{Map, Value};
+use crate::types::Keyed;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_LIMIT: usize = 256;
@@ -65,61 +66,92 @@ impl Options {
     }
 }
 
-/// Entries in order, keyed by their `guid` field.
-#[derive(Default, Debug)]
-pub struct Collection {
-    order: Vec<String>,
-    by_key: HashMap<String, Value>,
+/// Entries in order, indexed by key.
+#[derive(Debug)]
+pub struct Collection<T> {
+    entries: Vec<T>,
+    index: HashMap<String, usize>,
 }
 
-impl Collection {
-    pub fn new(entries: Vec<Value>) -> Self {
-        let mut collection = Self::default();
-        for (index, entry) in entries.into_iter().enumerate() {
-            let key = entry["guid"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("#{index}"));
-            collection.order.push(key.clone());
-            collection.by_key.insert(key, entry);
-        }
-        collection
+impl<T: Keyed + Clone + PartialEq> Collection<T> {
+    pub fn new(entries: Vec<T>) -> Self {
+        let index = entries
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| (entry.key().to_owned(), position))
+            .collect();
+        Self { entries, index }
     }
 
     pub fn len(&self) -> usize {
-        self.order.len()
+        self.entries.len()
+    }
+
+    fn get(&self, key: &str) -> Option<&T> {
+        self.index.get(key).map(|&position| &self.entries[position])
     }
 
     /// What changed from `self` to `newer`.
-    pub fn diff(&self, newer: &Collection) -> Delta {
-        Delta {
-            added: newer
-                .order
-                .iter()
-                .filter(|key| !self.by_key.contains_key(*key))
-                .cloned()
-                .collect(),
-            removed: self
-                .order
-                .iter()
-                .filter(|key| !newer.by_key.contains_key(*key))
-                .cloned()
-                .collect(),
-            changed: newer
-                .order
-                .iter()
-                .filter(|key| matches!(self.by_key.get(*key), Some(old) if *old != newer.by_key[*key]))
-                .cloned()
-                .collect(),
+    pub fn diff(&self, newer: &Collection<T>) -> Delta {
+        let mut delta = Delta::default();
+        for entry in &newer.entries {
+            match self.get(entry.key()) {
+                None => delta.added.push(entry.key().to_owned()),
+                Some(old) if old != entry => delta.changed.push(entry.key().to_owned()),
+                Some(_) => {}
+            }
         }
+        for entry in &self.entries {
+            if !newer.index.contains_key(entry.key()) {
+                delta.removed.push(entry.key().to_owned());
+            }
+        }
+        delta
     }
 
-    fn entries<'a>(&'a self, keys: impl Iterator<Item = &'a String>) -> Vec<Value> {
-        keys.filter_map(|key| self.by_key.get(key).cloned()).collect()
+    /// Builds one subscriber's view of a change. With no `delta` this is the
+    /// subscriber's first notification, so everything counts as added.
+    pub fn render(&self, delta: Option<&Delta>, options: Options) -> Change<T> {
+        let initial;
+        let delta = match delta {
+            Some(delta) => delta,
+            None => {
+                initial = Delta {
+                    added: self.entries.iter().map(|entry| entry.key().to_owned()).collect(),
+                    ..Delta::default()
+                };
+                &initial
+            }
+        };
+        let lists_fit = delta.len() <= options.limit;
+        let (entries, truncated) = match options.include {
+            Include::None => (None, !lists_fit),
+            Include::Changed if lists_fit => {
+                let wanted: HashSet<&str> =
+                    delta.added.iter().chain(&delta.changed).map(String::as_str).collect();
+                let entries = self
+                    .entries
+                    .iter()
+                    .filter(|entry| wanted.contains(entry.key()))
+                    .cloned()
+                    .collect();
+                (Some(entries), false)
+            }
+            Include::Changed => (None, true),
+            // Subscribers holding the whole collection don't need the lists.
+            Include::All if self.len() <= options.limit => (Some(self.entries.clone()), false),
+            Include::All => (None, true),
+        };
+        Change {
+            count: self.len(),
+            delta: lists_fit.then(|| delta.clone()),
+            entries,
+            truncated,
+        }
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct Delta {
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -136,51 +168,15 @@ impl Delta {
     }
 }
 
-/// Builds notification params for one subscriber. With no `delta` this is a
-/// subscriber's first notification, so everything counts as added.
-pub fn render(field: &str, current: &Collection, delta: Option<&Delta>, options: Options) -> Value {
-    let initial;
-    let delta = match delta {
-        Some(delta) => delta,
-        None => {
-            initial = Delta {
-                added: current.order.clone(),
-                ..Delta::default()
-            };
-            &initial
-        }
-    };
-    let mut params = Map::new();
-    params.insert("count".into(), current.len().into());
-
-    let lists_fit = delta.len() <= options.limit;
-    if lists_fit {
-        params.insert("added".into(), delta.added.clone().into());
-        params.insert("removed".into(), delta.removed.clone().into());
-        params.insert("changed".into(), delta.changed.clone().into());
-    }
-
-    let truncated = match options.include {
-        Include::None => !lists_fit,
-        Include::Changed => {
-            if lists_fit {
-                let wanted: HashSet<&String> = delta.added.iter().chain(&delta.changed).collect();
-                let entries = current.entries(current.order.iter().filter(|key| wanted.contains(key)));
-                params.insert(field.into(), entries.into());
-            }
-            !lists_fit
-        }
-        // Subscribers holding the whole collection don't need the lists.
-        Include::All => {
-            let fits = current.len() <= options.limit;
-            if fits {
-                params.insert(field.into(), current.entries(current.order.iter()).into());
-            }
-            !fits
-        }
-    };
-    params.insert("truncated".into(), truncated.into());
-    Value::Object(params)
+/// One subscriber's view of a change, before it's given its wire shape
+/// (`types::ItemsChange`, `types::TracksChange`).
+#[derive(Debug, PartialEq)]
+pub struct Change<T> {
+    pub count: usize,
+    /// The change lists, unless they exceed the limit.
+    pub delta: Option<Delta>,
+    pub entries: Option<Vec<T>>,
+    pub truncated: bool,
 }
 
 #[cfg(test)]
@@ -188,12 +184,39 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn item(guid: &str, position: f64) -> Value {
-        json!({ "guid": guid, "position": position })
+    #[derive(Clone, Debug, PartialEq)]
+    struct Entry {
+        guid: String,
+        position: f64,
+    }
+
+    impl Keyed for Entry {
+        fn key(&self) -> &str {
+            &self.guid
+        }
+    }
+
+    fn entry(guid: &str, position: f64) -> Entry {
+        Entry {
+            guid: guid.into(),
+            position,
+        }
+    }
+
+    fn collection(entries: &[(&str, f64)]) -> Collection<Entry> {
+        Collection::new(entries.iter().map(|&(guid, position)| entry(guid, position)).collect())
+    }
+
+    fn numbered(count: usize, position: f64) -> Collection<Entry> {
+        Collection::new((0..count).map(|i| entry(&i.to_string(), position)).collect())
     }
 
     fn options(include: Include, limit: usize) -> Options {
         Options { include, limit }
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
     }
 
     #[test]
@@ -210,14 +233,14 @@ mod tests {
 
     #[test]
     fn diff_finds_added_removed_and_changed() {
-        let old = Collection::new(vec![item("a", 0.0), item("b", 1.0), item("c", 2.0)]);
-        let new = Collection::new(vec![item("b", 1.0), item("c", 5.0), item("d", 3.0)]);
+        let old = collection(&[("a", 0.0), ("b", 1.0), ("c", 2.0)]);
+        let new = collection(&[("b", 1.0), ("c", 5.0), ("d", 3.0)]);
         assert_eq!(
             old.diff(&new),
             Delta {
-                added: vec!["d".into()],
-                removed: vec!["a".into()],
-                changed: vec!["c".into()],
+                added: strings(&["d"]),
+                removed: strings(&["a"]),
+                changed: strings(&["c"]),
             }
         );
         assert!(new.diff(&new).is_empty());
@@ -225,62 +248,69 @@ mod tests {
 
     #[test]
     fn first_notification_lists_everything_as_added() {
-        let current = Collection::new(vec![item("a", 0.0), item("b", 1.0)]);
-        let params = render("items", &current, None, Options::default());
+        let current = collection(&[("a", 0.0), ("b", 1.0)]);
         assert_eq!(
-            params,
-            json!({
-                "count": 2,
-                "added": ["a", "b"],
-                "removed": [],
-                "changed": [],
-                "items": [item("a", 0.0), item("b", 1.0)],
-                "truncated": false,
-            })
+            current.render(None, Options::default()),
+            Change {
+                count: 2,
+                delta: Some(Delta {
+                    added: strings(&["a", "b"]),
+                    ..Delta::default()
+                }),
+                entries: Some(vec![entry("a", 0.0), entry("b", 1.0)]),
+                truncated: false,
+            }
         );
     }
 
     #[test]
     fn changed_includes_only_added_and_changed_entries() {
-        let old = Collection::new(vec![item("a", 0.0), item("b", 1.0), item("c", 2.0)]);
-        let new = Collection::new(vec![item("b", 1.0), item("c", 5.0), item("d", 3.0)]);
-        let delta = old.diff(&new);
-        let params = render("items", &new, Some(&delta), Options::default());
-        assert_eq!(params["items"], json!([item("c", 5.0), item("d", 3.0)]));
-        assert_eq!(params["removed"], json!(["a"]));
-        assert_eq!(params["truncated"], false);
+        let old = collection(&[("a", 0.0), ("b", 1.0), ("c", 2.0)]);
+        let new = collection(&[("b", 1.0), ("c", 5.0), ("d", 3.0)]);
+        let change = new.render(Some(&old.diff(&new)), Options::default());
+        assert_eq!(change.entries, Some(vec![entry("c", 5.0), entry("d", 3.0)]));
+        assert_eq!(change.delta.unwrap().removed, strings(&["a"]));
+        assert!(!change.truncated);
     }
 
     #[test]
     fn large_changes_are_truncated() {
-        let old = Collection::new((0..10).map(|i| item(&i.to_string(), 0.0)).collect());
-        let new = Collection::new((0..10).map(|i| item(&i.to_string(), 1.0)).collect());
+        let old = numbered(10, 0.0);
+        let new = numbered(10, 1.0);
         let delta = old.diff(&new);
         for include in [Include::None, Include::Changed] {
-            let params = render("items", &new, Some(&delta), options(include, 5));
-            assert_eq!(params, json!({ "count": 10, "truncated": true }));
+            let change = new.render(Some(&delta), options(include, 5));
+            assert_eq!(
+                change,
+                Change {
+                    count: 10,
+                    delta: None,
+                    entries: None,
+                    truncated: true,
+                }
+            );
         }
     }
 
     #[test]
     fn all_sends_the_whole_collection_when_it_fits() {
-        let old = Collection::new((0..4).map(|i| item(&i.to_string(), 0.0)).collect());
-        let new = Collection::new((0..4).map(|i| item(&i.to_string(), 1.0)).collect());
+        let old = numbered(4, 0.0);
+        let new = numbered(4, 1.0);
         let delta = old.diff(&new);
-        let params = render("items", &new, Some(&delta), options(Include::All, 4));
-        assert_eq!(params["items"].as_array().unwrap().len(), 4);
-        assert_eq!(params["truncated"], false);
+        let change = new.render(Some(&delta), options(Include::All, 4));
+        assert_eq!(change.entries.map(|entries| entries.len()), Some(4));
+        assert!(!change.truncated);
 
-        let params = render("items", &new, Some(&delta), options(Include::All, 3));
-        assert!(params.get("items").is_none());
-        assert_eq!(params["truncated"], true);
+        let change = new.render(Some(&delta), options(Include::All, 3));
+        assert_eq!(change.entries, None);
+        assert!(change.truncated);
     }
 
     #[test]
     fn none_never_includes_entries() {
-        let current = Collection::new(vec![item("a", 0.0)]);
-        let params = render("items", &current, None, options(Include::None, 10));
-        assert!(params.get("items").is_none());
-        assert_eq!(params["added"], json!(["a"]));
+        let current = collection(&[("a", 0.0)]);
+        let change = current.render(None, options(Include::None, 10));
+        assert_eq!(change.entries, None);
+        assert_eq!(change.delta.unwrap().added, strings(&["a"]));
     }
 }

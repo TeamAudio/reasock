@@ -6,6 +6,7 @@ mod log;
 mod model;
 mod protocol;
 mod server;
+mod types;
 
 use crate::log::log;
 use reaper_low::PluginContext;
