@@ -3,15 +3,19 @@
 A REAPER extension that opens a local WebSocket so outside programs can talk to
 REAPER, without each one writing its own extension.
 
-The idea has three directions of traffic:
+It carries three directions of traffic:
 
-- **Ask**: a client calls into REAPER (run actions; later, the wider API).
-- **Tell**: REAPER pushes events to subscribers (not built yet).
+- **Ask**: a client calls into REAPER: the project, transport, tracks, items,
+  takes, and markers, and running any action.
+- **Tell**: REAPER pushes events to subscribers: project and transport changes,
+  edits, and item and track selection.
 - **Lend**: a client registers actions in REAPER's action list. Users can bind
   them to hotkeys and menus, and triggering one sends the context back to that
   client.
 
-This is a spike. It proves Lend end to end, plus the smallest Ask (`action.run`).
+It speaks JSON-RPC 2.0, described by an OpenRPC document (`openrpc.json`), and
+is installable through ReaPack. Clients include a typed TypeScript package
+(`@techaudio/reasock`) and examples in Python, Lua, and shell.
 
 ## Try it
 

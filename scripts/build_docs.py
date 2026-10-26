@@ -210,7 +210,7 @@ def render_schema(name: str, schema: dict) -> str:
     return "\n".join(parts)
 
 
-# Tech Audio styling, after techaud.io and Dingus's build index: gray-900
+# Tech Audio styling, after techaud.io: gray-900
 # base, fuchsia accent, Karla for text and Roboto Slab for headings.
 STYLE = """
 @font-face { font-family: "Karla"; font-weight: 200 800; font-display: swap;
