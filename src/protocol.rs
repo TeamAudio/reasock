@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-pub const PROTOCOL_VERSION: &str = "0.2.0";
+pub const PROTOCOL_VERSION: &str = "0.3.0";
 
 /// An application error: a code outside JSON-RPC's reserved range, with a
 /// name for the OpenRPC document.
@@ -23,6 +23,11 @@ pub const ALREADY_INITIALIZED: AppError = AppError {
     name: "AlreadyInitialized",
     code: -32002,
     message: "already initialized",
+};
+pub const UNAUTHORIZED: AppError = AppError {
+    name: "Unauthorized",
+    code: -32003,
+    message: "missing or wrong token; read it from this REAPER's instance file",
 };
 pub const ACTION_CONFLICT: AppError = AppError {
     name: "ActionConflict",
@@ -54,6 +59,7 @@ pub const NOT_FOUND: AppError = AppError {
 pub const APP_ERRORS: &[&AppError] = &[
     &NOT_INITIALIZED,
     &ALREADY_INITIALIZED,
+    &UNAUTHORIZED,
     &ACTION_CONFLICT,
     &UNKNOWN_ACTION,
     &UNKNOWN_COMMAND,

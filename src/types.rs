@@ -371,6 +371,10 @@ pub struct Empty {}
 pub struct InitializeParams {
     pub protocol_version: String,
     pub client: ClientInfo,
+    /// Required on WebSocket connections: the `token` from this REAPER's
+    /// instance file (`~/.reasock/instances/<pid>.json`), which only the
+    /// current user can read.
+    pub token: Option<String>,
     /// Reserved for features the client opts into. Currently ignored.
     #[allow(dead_code)]
     pub capabilities: Option<Map<String, Value>>,

@@ -2,8 +2,8 @@
   "openrpc": "1.4.1",
   "info": {
     "title": "ReaSock",
-    "version": "0.2.0",
-    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`. Scripts inside REAPER use the same protocol through the ReaScript functions listed under `x-reascript`.",
+    "version": "0.3.0",
+    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize`, with the `token` from that file, before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`. Scripts inside REAPER use the same protocol through the ReaScript functions listed under `x-reascript`.",
     "license": {
       "name": "MIT"
     }
@@ -25,7 +25,7 @@
     {
       "name": "initialize",
       "summary": "Start a session",
-      "description": "Must be the first call on a connection. The server always answers with its own `protocolVersion`; if that differs from the client's, the client decides whether to continue.",
+      "description": "Must be the first call on a connection. WebSocket clients prove they run as the same user as REAPER by sending the `token` from its instance file. The server always answers with its own `protocolVersion`; if that differs from the client's, the client decides whether to continue.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -40,6 +40,16 @@
           "required": true,
           "schema": {
             "$ref": "#/components/schemas/ClientInfo"
+          }
+        },
+        {
+          "name": "token",
+          "description": "Required on WebSocket connections: the `token` from this REAPER's\ninstance file (`~/.reasock/instances/<pid>.json`), which only the\ncurrent user can read.",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         {
@@ -63,6 +73,9 @@
       "errors": [
         {
           "$ref": "#/components/errors/AlreadyInitialized"
+        },
+        {
+          "$ref": "#/components/errors/Unauthorized"
         }
       ],
       "examples": [
@@ -71,7 +84,7 @@
           "params": [
             {
               "name": "protocolVersion",
-              "value": "0.2.0"
+              "value": "0.3.0"
             },
             {
               "name": "client",
@@ -79,12 +92,16 @@
                 "name": "demo",
                 "version": "1.0.0"
               }
+            },
+            {
+              "name": "token",
+              "value": "<64 hex digits from the instance file>"
             }
           ],
           "result": {
             "name": "result",
             "value": {
-              "protocolVersion": "0.2.0",
+              "protocolVersion": "0.3.0",
               "server": {
                 "name": "reasock",
                 "version": "0.1.0"
@@ -1924,6 +1941,10 @@
       "AlreadyInitialized": {
         "code": -32002,
         "message": "already initialized"
+      },
+      "Unauthorized": {
+        "code": -32003,
+        "message": "missing or wrong token; read it from this REAPER's instance file"
       },
       "ActionConflict": {
         "code": -32010,

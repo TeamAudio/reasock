@@ -31,7 +31,8 @@ documentation** action and `ReaSock_OpenDocs()` open it.
 
 On load, ReaSock listens on `127.0.0.1`, using the first free port from 9670
 to 9679 (`REASOCK_PORT` overrides this). It writes
-`~/.reasock/instances/<pid>.json` and logs to `~/.reasock/reasock.log`.
+`~/.reasock/instances/<pid>.json` (port and connection token) and logs to
+`~/.reasock/reasock.log`.
 `examples/reasock-client.mjs` is a small dependency-free Node client.
 
 ## Protocol
@@ -196,7 +197,14 @@ them only when it sends something.
 
 ReaSock listens on `127.0.0.1` only, so other machines can't reach it.
 
-Web pages are a different matter: a page can open a WebSocket to `127.0.0.1`
+Clients prove they run as the same user as REAPER: `initialize` needs the
+`token` from the instance file, `~/.reasock/instances/<pid>.json`, a random
+256-bit value that changes every time REAPER starts. On macOS and Linux the
+file and its folders are readable only by you; on Windows, your profile
+folder already is. Other users on the machine and web pages can't read it.
+Scripts inside REAPER (`ReaSock_Open`) need no token.
+
+Web pages need a second check: a page can open a WebSocket to `127.0.0.1`
 from any site, and browsers don't apply cross-origin rules to WebSockets. So
 ReaSock refuses any handshake that carries an `Origin` header (which browsers
 always send, and pages can't forge) unless that origin is allowed in

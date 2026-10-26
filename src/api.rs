@@ -13,7 +13,8 @@ use crate::collection;
 use crate::model;
 use crate::protocol::{
     self, AppError, Params, RpcError, ACTION_CONFLICT, ALREADY_INITIALIZED, APP_ERRORS,
-    NOT_FOUND, NOT_INITIALIZED, REGISTRATION_FAILED, UNKNOWN_ACTION, UNKNOWN_COMMAND,
+    NOT_FOUND, NOT_INITIALIZED, REGISTRATION_FAILED, UNAUTHORIZED, UNKNOWN_ACTION,
+    UNKNOWN_COMMAND,
 };
 use crate::server::ConnId;
 use crate::types::*;
@@ -76,11 +77,12 @@ struct Initialize;
 impl Method for Initialize {
     const NAME: &'static str = "initialize";
     const SUMMARY: &'static str = "Start a session";
-    const DESCRIPTION: &'static str = "Must be the first call on a connection. The server always \
-        answers with its own `protocolVersion`; if that differs from the client's, the client \
-        decides whether to continue.";
+    const DESCRIPTION: &'static str = "Must be the first call on a connection. WebSocket clients \
+        prove they run as the same user as REAPER by sending the `token` from its instance file. \
+        The server always answers with its own `protocolVersion`; if that differs from the \
+        client's, the client decides whether to continue.";
     const OPEN: bool = true;
-    const ERRORS: &'static [&'static AppError] = &[&ALREADY_INITIALIZED];
+    const ERRORS: &'static [&'static AppError] = &[&ALREADY_INITIALIZED, &UNAUTHORIZED];
     type Params = InitializeParams;
     type Result = InitializeResult;
 
@@ -94,6 +96,7 @@ impl Method for Initialize {
             "params": [
                 { "name": "protocolVersion", "value": protocol::PROTOCOL_VERSION },
                 { "name": "client", "value": { "name": "demo", "version": "1.0.0" } },
+                { "name": "token", "value": "<64 hex digits from the instance file>" },
             ],
             "result": {
                 "name": "result",
@@ -738,8 +741,8 @@ pub fn document() -> Value {
             "version": protocol::PROTOCOL_VERSION,
             "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. \
                 Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. \
-                After connecting, a client must call `initialize` before anything else except \
-                `rpc.discover`. Params are always by name. Messages the server sends to clients \
+                After connecting, a client must call `initialize`, with the `token` from that \
+                file, before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients \
                 on its own (registered actions running, and subscribed events) are listed under \
                 `x-notifications`. Scripts inside REAPER use the same protocol through the \
                 ReaScript functions listed under `x-reascript`.",

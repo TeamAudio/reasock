@@ -17,6 +17,8 @@ reaper-medium = { git = "https://github.com/helgoboss/reaper-rs.git", rev = "955
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 schemars = "1"
+# Already in the tree through tungstenite; used for the connection token.
+getrandom = "0.4"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 [profile.dev]

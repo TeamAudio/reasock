@@ -8,9 +8,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const PROTOCOL_VERSION = "0.2.0";
+export const PROTOCOL_VERSION = "0.3.0";
 
-/** Returns the most recently announced REAPER instance that is still running. */
+/**
+ * Returns the most recently announced REAPER instance that is still running:
+ * `{pid, port, token, reasockVersion, reaperVersion}`.
+ */
 export function findInstance() {
   const dir = join(homedir(), ".reasock", "instances");
   let names = [];
@@ -38,8 +41,16 @@ export class RpcError extends Error {
   }
 }
 
-/** Connects, calls `initialize`, and resolves to a client. */
-export async function connect({ name, version, port = findInstance().port, timeoutMs = 5000 }) {
+/**
+ * Connects, calls `initialize`, and resolves to a client. The port and token
+ * come from the running REAPER's instance file unless given.
+ */
+export async function connect({ name, version, port, token, timeoutMs = 5000 }) {
+  if (port === undefined || token === undefined) {
+    const instance = findInstance();
+    port ??= instance.port;
+    token ??= instance.token;
+  }
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   const pending = new Map();
   const handlers = new Map();
@@ -96,6 +107,7 @@ export async function connect({ name, version, port = findInstance().port, timeo
   client.session = await client.call("initialize", {
     protocolVersion: PROTOCOL_VERSION,
     client: version ? { name, version } : { name },
+    token,
   });
   return client;
 }

@@ -31,6 +31,9 @@ use std::time::{Duration, Instant};
 struct Connection {
     /// Set by `initialize`; used to namespace this connection's actions.
     client: Option<String>,
+    /// Opened by a script inside REAPER rather than over the socket, so it
+    /// needs no token.
+    local: bool,
     outbox: Sender<String>,
     subscriptions: BTreeMap<EventName, Options>,
     /// Subscribed since the last tick; owed the current snapshot.
@@ -140,6 +143,7 @@ fn handle_inbound(message: Inbound) {
         Inbound::Connected { conn, outbox } => with_state(|state| {
             let connection = Connection {
                 client: None,
+                local: false,
                 outbox,
                 subscriptions: BTreeMap::new(),
                 pending_initial: BTreeSet::new(),
@@ -225,6 +229,11 @@ pub fn initialize(conn: ConnId, params: InitializeParams) -> Result<InitializeRe
             .ok_or_else(|| RpcError::internal("unknown connection"))?;
         if connection.client.is_some() {
             return Err(RpcError::already_initialized());
+        }
+        let token_ok = params.token.as_deref().is_some_and(crate::discovery::token_matches);
+        if !connection.local && !token_ok {
+            log!("conn {conn}: refused initialize with a missing or wrong token");
+            return Err(RpcError::app(&protocol::UNAUTHORIZED, protocol::UNAUTHORIZED.message));
         }
         connection.client = Some(client.clone());
         Ok(())
@@ -630,6 +639,11 @@ pub fn open_local(client: &str) -> Result<ConnId, String> {
     let conn = NEXT_LOCAL.fetch_add(1, Ordering::Relaxed);
     let (outbox, inbox) = mpsc::channel();
     handle_inbound(Inbound::Connected { conn, outbox });
+    with_state(|state| {
+        if let Some(connection) = state.connections.get_mut(&conn) {
+            connection.local = true;
+        }
+    });
     with_locals(|locals| {
         let last_used = Instant::now();
         locals.insert(conn, Local { inbox, last_used })

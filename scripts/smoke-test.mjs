@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { connect, findInstance, mirrorSelection, PROTOCOL_VERSION } from "../examples/reasock-client.mjs";
 
-const { port } = findInstance();
+const { port, token } = findInstance();
 let failures = 0;
 
 async function check(name, fn) {
@@ -129,6 +129,28 @@ await check("bad client name is -32602", async () => {
   assert.equal(errorCode(await raw.next()), -32602);
 });
 
+await check("initialize needs this REAPER's token (-32003)", async () => {
+  const init = (id, extra) => ({
+    jsonrpc: "2.0", id, method: "initialize",
+    params: { protocolVersion: PROTOCOL_VERSION, client: { name: "smoke" }, ...extra },
+  });
+  raw.send(init(20, {}));
+  assert.equal(errorCode(await raw.next()), -32003);
+  raw.send(init(21, { token: "0".repeat(64) }));
+  assert.equal(errorCode(await raw.next()), -32003);
+  raw.send(init(22, { token: token.slice(1) }));
+  assert.equal(errorCode(await raw.next()), -32003);
+});
+
+await check("the instance file is readable only by this user", async () => {
+  if (process.platform === "win32") return;
+  const { statSync, readdirSync } = await import("node:fs");
+  const dir = join(homedir(), ".reasock", "instances");
+  const file = join(dir, readdirSync(dir).find((name) => name === `${findInstance().pid}.json`));
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+});
+
 await check("notifications get no reply", async () => {
   raw.send({ jsonrpc: "2.0", method: "rpc.discover" });
   raw.send({ jsonrpc: "2.0", id: 7, method: "nope" });
@@ -137,9 +159,9 @@ await check("notifications get no reply", async () => {
 
 await check("batch gets an array of replies, skipping notifications", async () => {
   raw.send([
-    { jsonrpc: "2.0", id: 8, method: "initialize", params: { protocolVersion: PROTOCOL_VERSION, client: { name: "smoke" } } },
+    { jsonrpc: "2.0", id: 8, method: "initialize", params: { protocolVersion: PROTOCOL_VERSION, client: { name: "smoke" }, token } },
     { jsonrpc: "2.0", method: "rpc.discover" },
-    { jsonrpc: "2.0", id: 9, method: "initialize", params: { protocolVersion: PROTOCOL_VERSION, client: { name: "smoke" } } },
+    { jsonrpc: "2.0", id: 9, method: "initialize", params: { protocolVersion: PROTOCOL_VERSION, client: { name: "smoke" }, token } },
   ]);
   const replies = await raw.next();
   assert.ok(Array.isArray(replies));
