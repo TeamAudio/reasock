@@ -169,6 +169,13 @@ fn send(conn: ConnId, text: String) {
     }
 }
 
+/// Drops every connection, so WebSocket clients get a close frame rather than
+/// a reset when REAPER exits.
+pub fn shutdown() {
+    with_state(|state| state.connections.clear());
+    with_locals(|locals| locals.clear());
+}
+
 /// This connection's client name, once it has called `initialize`.
 pub fn client(conn: ConnId) -> Option<String> {
     with_state(|state| state.connections.get(&conn).and_then(|c| c.client.clone()))

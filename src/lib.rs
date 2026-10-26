@@ -45,5 +45,7 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
 
 extern "C" fn on_exit() {
     discovery::remove();
-    log!("REAPER exiting");
+    bridge::shutdown();
+    let closed = server::wait_for_connections(std::time::Duration::from_millis(300));
+    log!("REAPER exiting; connections closed cleanly: {closed}");
 }

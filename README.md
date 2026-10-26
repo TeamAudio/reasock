@@ -181,6 +181,9 @@ them only when it sends something.
   `NamedCommandLookup` still returns an ID, and `Main_OnCommand` on it silently
   does nothing. `action.run` therefore checks `kbd_getTextFromCmd` and rejects
   commands that aren't in the action list.
+- **Clients see REAPER close.** When REAPER quits, every WebSocket client
+  gets close code 1001 ("REAPER is closing") rather than a reset, so clients
+  can tell a shutdown from a crash.
 - **Modal dialogs pause the bridge.** The main-thread timer doesn't run while,
   for example, the update notification is open. Requests queue until it
   closes, so clients need timeouts and a "REAPER busy" state.
@@ -220,7 +223,6 @@ them only when it sends something.
 
 ## Next
 
-- Close sockets cleanly when REAPER exits (clients currently see a reset).
 - Enforce documented param constraints automatically once they multiply:
   `garde` attributes are read by schemars, so one attribute could document
   and enforce a constraint. Full JSON Schema validation (`jsonschema`) was

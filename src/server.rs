@@ -7,9 +7,12 @@
 use crate::log::log;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tungstenite::protocol::frame::coding::CloseCode;
+use tungstenite::protocol::CloseFrame;
 use tungstenite::{Error as WsError, Message};
 
 pub type ConnId = u64;
@@ -70,7 +73,29 @@ fn accept_loop(listener: TcpListener, inbox: Sender<Inbound>) {
     }
 }
 
+/// Connection threads still running.
+static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// Waits up to `timeout` for every connection thread to finish. Dropping a
+/// connection's outbox makes its thread send a close frame and end.
+pub fn wait_for_connections(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while ACTIVE.load(Ordering::SeqCst) > 0 {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    true
+}
+
 fn serve(conn: ConnId, stream: TcpStream, inbox: Sender<Inbound>) {
+    ACTIVE.fetch_add(1, Ordering::SeqCst);
+    serve_connection(conn, stream, inbox);
+    ACTIVE.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn serve_connection(conn: ConnId, stream: TcpStream, inbox: Sender<Inbound>) {
     let _ = stream.set_nodelay(true);
     let mut ws = match tungstenite::accept(stream) {
         Ok(ws) => ws,
@@ -116,8 +141,13 @@ fn serve(conn: ConnId, stream: TcpStream, inbox: Sender<Inbound>) {
                     }
                 }
                 Err(TryRecvError::Empty) => break,
+                // REAPER is shutting down.
                 Err(TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
+                    let _ = ws.close(Some(CloseFrame {
+                        code: CloseCode::Away,
+                        reason: "REAPER is closing".into(),
+                    }));
+                    let _ = ws.flush();
                     break 'session;
                 }
             }
