@@ -1,1 +1,0 @@
-Security: WebSocket clients must send the `token` from REAPER's instance file (`~/.reasock/instances/<pid>.json`) in `initialize` (protocol 0.3.0). The token is random each time REAPER starts, and on macOS and Linux the instance file and its folders are now readable only by your user, so other users on the machine and web pages can't connect. Scripts inside REAPER need no token.
