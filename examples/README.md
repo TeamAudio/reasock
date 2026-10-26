@@ -13,6 +13,7 @@ single file to copy instead.
 | [`inspector.mjs`](inspector.mjs) | Node | Following every event as you work |
 | [`reasock-client.mjs`](reasock-client.mjs) | Node | A dependency-free client with `mirrorSelection()` |
 | [`python/`](python/) | Python | A client library; copying selected items' paths with a hotkey; following the selection |
+| [`dashboard/`](dashboard/) | Browser | A live dashboard in a browser tab, and how a web page connects safely (allowed origin, token from a local server) |
 | [`mcp/`](mcp/) | Node | An MCP server so AI agents (Claude Code, Claude Desktop) can inspect and drive REAPER |
 | [`lua/`](lua/) | Lua (ReaScript) | A live inspector panel (ReaImGui) and a selection follower, inside REAPER |
 | [`shell/`](shell/) | bash / zsh | `reasock <method>` and `reasock_watch` with websocat and jq |

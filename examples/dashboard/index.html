@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReaSock dashboard</title>
+<style>
+  :root { color-scheme: dark; --bg: #111827; --surface: #1f2937; --raised: #374151; --border: #4b5563;
+    --text: #d1d5db; --muted: #9ca3af; --heading: #f9fafb; --accent: #d946ef; --link: #93c5fd;
+    --green: #4ade80; --red: #f87171; --amber: #fbbf24; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; color: var(--text); background: var(--bg); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  header { display: flex; align-items: baseline; gap: 16px; border-bottom: 1px solid var(--accent); padding-bottom: 12px; }
+  h1 { margin: 0; font-size: 22px; color: var(--heading); font-weight: 600; }
+  .status { margin-left: auto; font-size: 13px; color: var(--muted); }
+  .status.up::before { content: "● "; color: var(--green); } .status.down::before { content: "● "; color: var(--red); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .card.wide { grid-column: 1 / -1; }
+  h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .big { font-size: 20px; color: var(--heading); }
+  .muted { color: var(--muted); }
+  button { background: var(--raised); color: var(--heading); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 14px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--heading); font-weight: 600; }
+  ol { margin: 0; padding-left: 20px; } li { margin: 2px 0; }
+  .playing { color: var(--green); } .recording { color: var(--red); } .paused { color: var(--amber); }
+  code { background: var(--raised); color: var(--heading); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ReaSock dashboard</h1>
+    <span id="project" class="muted"></span>
+    <span id="status" class="status down">connecting…</span>
+  </header>
+  <div class="grid">
+    <section class="card">
+      <h2>Transport</h2>
+      <p id="transport" class="big">…</p>
+      <button id="play">Play / Stop</button>
+    </section>
+    <section class="card">
+      <h2>Recent edits</h2>
+      <ol id="edits" class="muted"><li>none yet</li></ol>
+    </section>
+    <section class="card wide">
+      <h2 id="items-title">Selected items</h2>
+      <table><thead><tr><th>Track</th><th>Take</th><th>Position</th><th>Length</th><th>File</th></tr></thead>
+        <tbody id="items"></tbody></table>
+    </section>
+    <section class="card wide">
+      <h2>Selected tracks</h2>
+      <p id="tracks" class="muted">none</p>
+    </section>
+  </div>
+</main>
+<script type="module">
+  import { connect, mirrorSelection } from "/reasock/browser.js";
+
+  const $ = (id) => document.getElementById(id);
+  const text = (value) => document.createTextNode(String(value ?? ""));
+  const status = (up, message) => { $("status").className = `status ${up ? "up" : "down"}`; $("status").textContent = message; };
+
+  // Asked again on every reconnect: a restarted REAPER has a new token.
+  async function endpoint() {
+    const response = await fetch("/endpoint");
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error);
+    return body;
+  }
+
+  try {
+    const reasock = await connect({ name: "dashboard", version: "1.0", endpoint, reconnect: true });
+    status(true, `REAPER ${reasock.session.reaper.version}`);
+    reasock.onConnectionChange((up) => status(up, up ? `REAPER ${reasock.session.reaper.version}` : "reconnecting…"));
+
+    reasock.on("project.changed", (project) => {
+      $("project").textContent = `${project.name ?? "(unsaved)"}${project.dirty ? " *" : ""}`;
+    });
+    reasock.on("transport.changed", ({ playing, paused, recording }) => {
+      const [label, cls] = recording ? ["Recording", "recording"] : paused ? ["Paused", "paused"] : playing ? ["Playing", "playing"] : ["Stopped", ""];
+      $("transport").textContent = label;
+      $("transport").className = `big ${cls}`;
+    });
+    const edits = [];
+    reasock.on("project.edited", ({ lastUndo, stateChangeCount }) => {
+      if (!lastUndo) return;
+      edits.unshift(`#${stateChangeCount} ${lastUndo}`);
+      $("edits").replaceChildren(...edits.slice(0, 8).map((edit) => {
+        const li = document.createElement("li"); li.append(text(edit)); return li;
+      }));
+    });
+    await reasock.subscribe("project.changed", "project.edited", "transport.changed");
+
+    $("play").onclick = () => reasock.call("action.run", { command: 40044 }); // Transport: Play/stop
+
+    await mirrorSelection(reasock, "items", {
+      onChange: ({ count, entries }) => {
+        $("items-title").textContent = `Selected items (${count})`;
+        $("items").replaceChildren(...[...entries.values()].slice(0, 200).map((item) => {
+          const row = document.createElement("tr");
+          for (const value of [item.track ?? "?", item.name ?? "(no take)", `${item.position.toFixed(3)}s`,
+                               `${item.length.toFixed(3)}s`, item.path?.split(/[\\/]/).pop() ?? ""]) {
+            const cell = document.createElement("td"); cell.append(text(value)); row.append(cell);
+          }
+          return row;
+        }));
+      },
+    });
+    await mirrorSelection(reasock, "tracks", {
+      onChange: ({ entries }) => {
+        const names = [...entries.values()].map((track) => `${track.number}: ${track.name || "(unnamed)"}`);
+        $("tracks").textContent = names.length ? names.join(", ") : "none";
+      },
+    });
+  } catch (error) {
+    status(false, error.message.includes("connect")
+      ? "ReaSock refused the page: run server.mjs with --allow, and check REAPER is running"
+      : error.message);
+  }
+</script>
+</body>
+</html>
