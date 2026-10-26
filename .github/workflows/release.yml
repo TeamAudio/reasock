@@ -18,6 +18,7 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -41,6 +42,7 @@ jobs:
   sign-macos:
     needs: build
     runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -111,6 +113,7 @@ jobs:
   sign-windows:
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 20
     # The Azure federated credential trusts only this environment, which
     # only admits v* tags.
     environment: release
@@ -162,6 +165,7 @@ jobs:
   draft:
     needs: [check, sign-macos, sign-windows]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

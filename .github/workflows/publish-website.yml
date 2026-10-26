@@ -22,6 +22,7 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout techaudio-web
         uses: actions/checkout@v7

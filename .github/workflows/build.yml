@@ -27,6 +27,7 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +104,7 @@ jobs:
   typescript:
     name: TypeScript client
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: clients/typescript
@@ -125,6 +127,7 @@ jobs:
   docs:
     name: API reference
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:

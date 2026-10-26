@@ -98,12 +98,19 @@ def set_version(version: str) -> None:
 
 
 def compile_notes(notes: list[tuple[str, Path]]) -> str:
+    """Joins the notes into one list. Lines that aren't list items become
+    items; indented items stay nested under the one before."""
     lines = []
     for _, path in notes:
         for line in path.read_text(encoding="utf-8").strip().splitlines():
-            line = line.strip()
-            if line:
-                lines.append(line if line.startswith(("-", "*")) else f"- {line}")
+            line = line.rstrip()
+            stripped = line.lstrip()
+            if not stripped:
+                continue
+            if stripped.startswith(("-", "*")):
+                lines.append(line if lines or line == stripped else stripped)
+            else:
+                lines.append(f"- {stripped}")
     return "\n".join(lines) + "\n"
 
 
