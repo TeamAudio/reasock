@@ -1,2 +1,0 @@
-- `@techaudio/reasock`: `createClient()` returns a client right away and connects when REAPER starts, for apps that start before REAPER. Actions and subscriptions set up meanwhile wait for the connection. Calls fail at once with `NotConnectedError` while disconnected, and a REAPER that doesn't answer in time gives `TimeoutError`, so apps can tell "not running" from "busy". `supports()` says whether the connected ReaSock has a method, `RpcError` carries the error's `data`, and the `signal` option stops a client.
-- Examples: `place.mjs` places media files at the edit cursor.
