@@ -1,0 +1,1 @@
+- Security: refuse WebSocket connections from web pages unless their origin is listed in `allowedOrigins` in `~/.reasock/config.json`. Browsers don't apply cross-origin rules to WebSockets, so in 0.1.0 any website open while REAPER was running could connect to ReaSock and run REAPER actions. Native clients (Node, Python, Electron main processes) are unaffected.

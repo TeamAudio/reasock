@@ -1,6 +1,6 @@
 [package]
 name = "reasock"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A generic WebSocket bridge between REAPER and the outside world"
 license = "LGPL-3.0-or-later"
