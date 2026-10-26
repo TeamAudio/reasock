@@ -49,6 +49,9 @@ const selection = await mirrorSelection(reasock, "items", {
   up. `onConnectionChange()` reports drops and recoveries. The client stays
   with the REAPER it connected to; when that one goes away it reconnects to
   the most recently started one.
+- `registerAction(id, label, handler, { toggle: true })` makes an action with
+  an on/off state (a checkmark in REAPER's menus); `setActionState(id, on)`
+  sets it, and it's restored after a reconnect too.
 - `supports("items.insert")` says whether the connected ReaSock has a method,
   so an app can hide features an older ReaSock lacks.
 - `on()` returns a function that removes the handler; `subscribe()` returns

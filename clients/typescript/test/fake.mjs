@@ -77,7 +77,13 @@ export class FakeReaSock {
       case "action.register":
         if (!/^[A-Za-z0-9]{1,32}$/.test(params.id)) return fail(-32602, "invalid action id");
         this.actions.add(params.id);
+        this.toggles ??= new Map();
+        if (params.toggle && !this.toggles.has(params.id)) this.toggles.set(params.id, false);
         return ok({ command: `_REASOCK_test_${params.id}`, commandId: 1 });
+      case "action.setState":
+        if (!this.toggles?.has(params.id)) return fail(-32011, "no toggle action with that id");
+        this.toggles.set(params.id, params.on);
+        return ok({});
       case "events.subscribe":
         if (params.events.some((event) => !EVENTS.has(typeof event === "string" ? event : event.event))) {
           return fail(-32602, "unknown event");

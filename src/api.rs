@@ -181,6 +181,23 @@ impl Method for UnregisterAction {
     }
 }
 
+struct SetActionState;
+impl Method for SetActionState {
+    const NAME: &'static str = "action.setState";
+    const SUMMARY: &'static str = "Turn one of this connection's toggle actions on or off";
+    const DESCRIPTION: &'static str = "For actions registered with `toggle: true`. REAPER shows \
+        the state as a checkmark in menus and a lit toolbar button. Running the action doesn't \
+        change its state by itself: the client decides, usually when it receives \
+        `action.triggered`.";
+    const ERRORS: &'static [&'static AppError] = &[&UNKNOWN_ACTION];
+    type Params = SetActionStateParams;
+    type Result = Empty;
+
+    fn call(ctx: &Ctx, params: SetActionStateParams) -> Result<Empty, RpcError> {
+        bridge::set_action_state(ctx.conn, params)
+    }
+}
+
 struct RunAction;
 impl Method for RunAction {
     const NAME: &'static str = "action.run";
@@ -448,9 +465,11 @@ impl Method for SetItems {
 struct SetTakes;
 impl Method for SetTakes {
     const NAME: &'static str = "takes.set";
-    const SUMMARY: &'static str = "Rename takes and change their extension data";
-    const DESCRIPTION: &'static str = "Works like `items.set`, for takes.";
-    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND];
+    const SUMMARY: &'static str = "Rename takes, relink their files, and change their extension data";
+    const DESCRIPTION: &'static str = "Works like `items.set`, for takes. `path` points a take at \
+        another file, such as one that was moved or renamed; peaks for it are built in the \
+        background.";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND, &MEDIA_UNAVAILABLE];
     type Params = SetTakesParams;
     type Result = Empty;
 
@@ -648,6 +667,7 @@ pub fn methods() -> &'static [Entry] {
             entry::<Discover>(),
             entry::<RegisterAction>(),
             entry::<UnregisterAction>(),
+            entry::<SetActionState>(),
             entry::<RunAction>(),
             entry::<Subscribe>(),
             entry::<Unsubscribe>(),

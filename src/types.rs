@@ -475,6 +475,17 @@ pub struct RegisterActionParams {
     /// Shown in the action list as `ReaSock (<client>): <label>`.
     #[schemars(length(min = 1))]
     pub label: String,
+    /// Give the action an on/off state, shown as a checkmark in menus and a
+    /// lit toolbar button. It starts off; set it with `action.setState`.
+    pub toggle: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetActionStateParams {
+    #[schemars(regex(pattern = NAME_PATTERN))]
+    pub id: String,
+    pub on: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -632,6 +643,10 @@ pub struct TakeChanges {
     pub guid: String,
     /// Renames the take.
     pub name: Option<String>,
+    /// Points the take at another file, such as a moved or renamed copy,
+    /// keeping its offset, rate, and length. Absolute, and checked like
+    /// `items.insert`'s files: errors say which entry in `data`.
+    pub path: Option<String>,
     /// Sets each key to its value (at most 64 KiB), or removes it when null.
     pub ext: Option<BTreeMap<ExtKey, Option<String>>>,
 }
@@ -680,8 +695,9 @@ pub struct InsertParams {
     /// In the order they're placed.
     #[schemars(length(min = 1, max = 1000))]
     pub files: Vec<InsertFile>,
-    /// Where the files start: seconds from the project start, or `cursor` for
-    /// the edit cursor. Defaults to `cursor`.
+    /// Where the files start: seconds from the project start, `cursor` for
+    /// the edit cursor, or `play` for the play position (the edit cursor when
+    /// stopped). Defaults to `cursor`.
     pub position: Option<InsertPosition>,
     /// Which track: a track's GUID; `current` for the first selected track,
     /// else the last touched one, else a new track (what REAPER's own insert
@@ -760,6 +776,8 @@ pub enum InsertPosition {
 pub enum PositionKeyword {
     /// The edit cursor.
     Cursor,
+    /// Where playback (or recording) is, or the edit cursor when stopped.
+    Play,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

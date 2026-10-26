@@ -15,11 +15,12 @@ use crate::types::{
     ActionCapabilities, ActionContext, ActionTriggered, Capabilities, CommandRef, DebugStats,
     DebugStatsParams, Empty, EventCapabilities, EventName, InitializeParams, InitializeResult,
     RanAction, ReaperInfo, RegisterActionParams, RegisteredAction, RunActionParams, ServerInfo,
+    SetActionStateParams,
     Subscription, SubscriptionParams, Subscriptions, UnregisterActionParams,
 };
 use reaper_medium::{
     ActionValueChange, CommandId, HookCommand, HookCommand2, ProjectContext, Reaper,
-    ReaperSession, SectionContext, WindowContext,
+    ReaperSession, SectionContext, ToggleAction, ToggleActionResult, WindowContext,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{c_char, c_int, c_void, CString};
@@ -88,6 +89,35 @@ struct State {
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
+
+/// The on/off state of toggle actions, by command ID. A lock of its own, held
+/// only for map lookups and never while calling REAPER: REAPER asks for
+/// toggle states whenever it draws a menu or toolbar, including from inside
+/// our own calls into it.
+static TOGGLES: Mutex<BTreeMap<u32, bool>> = Mutex::new(BTreeMap::new());
+
+fn set_toggle(command: CommandId, state: Option<bool>) {
+    let mut toggles = lock(&TOGGLES);
+    match state {
+        Some(on) => toggles.insert(command.get(), on),
+        None => toggles.remove(&command.get()),
+    };
+    drop(toggles);
+    Reaper::get().low().RefreshToolbar2(0, command.get() as c_int);
+}
+
+/// Tells REAPER whether our actions are on or off, for menu checkmarks and
+/// toolbar buttons.
+pub struct Toggles;
+impl ToggleAction for Toggles {
+    fn call(command: CommandId) -> ToggleActionResult {
+        match lock(&TOGGLES).get(&command.get()) {
+            Some(true) => ToggleActionResult::On,
+            Some(false) => ToggleActionResult::Off,
+            None => ToggleActionResult::NotRelevant,
+        }
+    }
+}
 static TRACKER: Mutex<Option<Tracker>> = Mutex::new(None);
 static INBOX: Mutex<Option<Receiver<Inbound>>> = Mutex::new(None);
 /// Kept alive for the life of REAPER; dropping it unregisters the hooks.
@@ -131,7 +161,7 @@ pub extern "C" fn on_timer() {
             handle_inbound(message);
         }
         close_idle_locals();
-        crate::edit::build_peaks();
+        crate::edit::tick();
         poll_events();
     });
     if result.is_err() {
@@ -162,7 +192,7 @@ fn handle_inbound(message: Inbound) {
 }
 
 fn disconnect(conn: ConnId) {
-    let removed: Vec<Action> = with_state(|state| {
+    let removed: Vec<(CommandId, Action)> = with_state(|state| {
         state.connections.remove(&conn);
         let commands: Vec<CommandId> = state
             .actions
@@ -172,11 +202,12 @@ fn disconnect(conn: ConnId) {
             .collect();
         commands
             .into_iter()
-            .filter_map(|command| state.actions.remove(&command))
+            .filter_map(|command| Some((command, state.actions.remove(&command)?)))
             .collect()
     });
-    for action in removed {
+    for (command, action) in removed {
         action.registration.remove();
+        set_toggle(command, None);
         log!("conn {conn}: unregistered _{}", action.command_name);
     }
 }
@@ -273,7 +304,7 @@ pub fn register_action(
     client: &str,
     params: RegisterActionParams,
 ) -> Result<RegisteredAction, RpcError> {
-    let RegisterActionParams { id, label } = params;
+    let RegisterActionParams { id, label, toggle } = params;
     validate_name(&id, "id")?;
     if label.is_empty() {
         return Err(RpcError::invalid_params("label must not be empty"));
@@ -291,8 +322,17 @@ pub fn register_action(
             .find(|(_, action)| action.command_name == command_name)
             .map(|(command, action)| (*command, action.conn))
     });
+    // A toggle starts off; registering again keeps its state.
+    let make_toggle = |command: CommandId| {
+        if toggle == Some(true) && !lock(&TOGGLES).contains_key(&command.get()) {
+            set_toggle(command, Some(false));
+        }
+    };
     match existing {
-        Some((command, owner)) if owner == conn => return Ok(registered(command)),
+        Some((command, owner)) if owner == conn => {
+            make_toggle(command);
+            return Ok(registered(command));
+        }
         Some(_) => {
             return Err(RpcError::app(
                 &protocol::ACTION_CONFLICT,
@@ -317,7 +357,28 @@ pub fn register_action(
             },
         )
     });
+    make_toggle(command);
     Ok(registered(command))
+}
+
+pub fn set_action_state(conn: ConnId, params: SetActionStateParams) -> Result<Empty, RpcError> {
+    validate_name(&params.id, "id")?;
+    let command = with_state(|state| {
+        state
+            .actions
+            .iter()
+            .find(|(_, action)| action.conn == conn && action.id == params.id)
+            .map(|(command, _)| *command)
+    })
+    .ok_or_else(|| RpcError::app(&protocol::UNKNOWN_ACTION, format!("no action with id {}", params.id)))?;
+    if !lock(&TOGGLES).contains_key(&command.get()) {
+        return Err(RpcError::invalid_params(format!(
+            "{} wasn't registered with toggle: true",
+            params.id
+        )));
+    }
+    set_toggle(command, Some(params.on));
+    Ok(Empty {})
 }
 
 fn register_custom_action(
@@ -360,12 +421,13 @@ pub fn unregister_action(conn: ConnId, params: UnregisterActionParams) -> Result
             .iter()
             .find(|(_, action)| action.conn == conn && action.id == id)
             .map(|(command, _)| *command)?;
-        state.actions.remove(&command)
+        Some((command, state.actions.remove(&command)?))
     });
-    let action = removed.ok_or_else(|| {
+    let (command, action) = removed.ok_or_else(|| {
         RpcError::app(&protocol::UNKNOWN_ACTION, format!("no action with id {id}"))
     })?;
     action.registration.remove();
+    set_toggle(command, None);
     log!("conn {conn}: unregistered _{}", action.command_name);
     Ok(Empty {})
 }

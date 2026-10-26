@@ -20,7 +20,7 @@ _reasock_instance() {
 
 _reasock_initialize() {
   jq -nc --arg token "$REASOCK_TOKEN" '{jsonrpc: "2.0", id: 0, method: "initialize",
-    params: {protocolVersion: "0.4.0", client: {name: "shell"}, token: $token}}'
+    params: {protocolVersion: "0.5.0", client: {name: "shell"}, token: $token}}'
 }
 
 # reasock <method> [params-json]: calls one method and prints its result.

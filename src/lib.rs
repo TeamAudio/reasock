@@ -30,6 +30,7 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
 
     session.plugin_register_add_hook_command::<bridge::Hook>()?;
     session.plugin_register_add_hook_command_2::<bridge::Hook>()?;
+    session.plugin_register_add_toggle_action::<bridge::Toggles>()?;
     session.plugin_register_add_timer(bridge::on_timer)?;
     session.plugin_register_add_at_exit(on_exit)?;
     lua::register(&mut session)?;

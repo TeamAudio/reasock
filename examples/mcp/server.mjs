@@ -150,5 +150,42 @@ server.registerTool(
   ({ command }) => tool((r) => r.call("action.run", { command })),
 );
 
+server.registerTool(
+  "reaper_insert_media",
+  {
+    title: "Place media files in REAPER",
+    description:
+      "Places audio, video, or MIDI files (or parts of them) on REAPER's timeline as one undoable step: at the edit cursor by default, on the selected (else last touched) track, one after another. Paths must be absolute. Use it when the user asks to put sounds into their project.",
+    inputSchema: {
+      files: z
+        .array(
+          z.object({
+            path: z.string().min(1).describe("Absolute path of the file"),
+            sourceStart: z.number().min(0).optional().describe("Seconds into the file to start from"),
+            length: z.number().positive().optional().describe("Seconds of the file to use"),
+          }),
+        )
+        .min(1)
+        .max(100),
+      position: z
+        .union([z.number().min(0), z.enum(["cursor", "play"])])
+        .optional()
+        .describe('Seconds from the project start, "cursor" (default), or "play" for the play position'),
+      track: z.string().optional().describe('A track GUID, "current" (default), "selected", or "new"'),
+      arrange: z.enum(["sequence", "tracks", "takes"]).optional().describe("How several files are laid out"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  (params) =>
+    tool(async (r) => {
+      try {
+        return await r.call("items.insert", params);
+      } catch (error) {
+        // Say which file didn't work, when ReaSock says.
+        throw error.data ? new Error(`${error.data.path}: ${error.data.reason}`) : error;
+      }
+    }),
+);
+
 await server.connect(new StdioServerTransport());
 console.error("reasock-mcp: ready");

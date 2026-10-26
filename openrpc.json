@@ -2,7 +2,7 @@
   "openrpc": "1.4.1",
   "info": {
     "title": "ReaSock",
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize`, with the `token` from that file, before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`. Scripts inside REAPER use the same protocol through the ReaScript functions listed under `x-reascript`.",
     "license": {
       "name": "MIT"
@@ -84,7 +84,7 @@
           "params": [
             {
               "name": "protocolVersion",
-              "value": "0.4.0"
+              "value": "0.5.0"
             },
             {
               "name": "client",
@@ -101,7 +101,7 @@
           "result": {
             "name": "result",
             "value": {
-              "protocolVersion": "0.4.0",
+              "protocolVersion": "0.5.0",
               "server": {
                 "name": "reasock",
                 "version": "0.1.0"
@@ -129,6 +129,7 @@
                   "rpc.discover",
                   "action.register",
                   "action.unregister",
+                  "action.setState",
                   "action.run",
                   "events.subscribe",
                   "events.unsubscribe",
@@ -190,6 +191,16 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        {
+          "name": "toggle",
+          "description": "Give the action an on/off state, shown as a checkmark in menus and a\nlit toolbar button. It starts off; set it with `action.setState`.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
         }
       ],
       "result": {
@@ -243,6 +254,43 @@
           "schema": {
             "type": "string",
             "pattern": "^[A-Za-z0-9]{1,32}$"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Empty"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/UnknownAction"
+        }
+      ]
+    },
+    {
+      "name": "action.setState",
+      "summary": "Turn one of this connection's toggle actions on or off",
+      "description": "For actions registered with `toggle: true`. REAPER shows the state as a checkmark in menus and a lit toolbar button. Running the action doesn't change its state by itself: the client decides, usually when it receives `action.triggered`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,32}$"
+          }
+        },
+        {
+          "name": "on",
+          "required": true,
+          "schema": {
+            "type": "boolean"
           }
         }
       ],
@@ -654,7 +702,7 @@
         },
         {
           "name": "position",
-          "description": "Where the files start: seconds from the project start, or `cursor` for\nthe edit cursor. Defaults to `cursor`.",
+          "description": "Where the files start: seconds from the project start, `cursor` for\nthe edit cursor, or `play` for the play position (the edit cursor when\nstopped). Defaults to `cursor`.",
           "schema": {
             "anyOf": [
               {
@@ -874,8 +922,8 @@
     },
     {
       "name": "takes.set",
-      "summary": "Rename takes and change their extension data",
-      "description": "Works like `items.set`, for takes.",
+      "summary": "Rename takes, relink their files, and change their extension data",
+      "description": "Works like `items.set`, for takes. `path` points a take at another file, such as one that was moved or renamed; peaks for it are built in the background.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -914,6 +962,9 @@
         },
         {
           "$ref": "#/components/errors/NotFound"
+        },
+        {
+          "$ref": "#/components/errors/MediaUnavailable"
         }
       ]
     },
@@ -2343,6 +2394,11 @@
             "type": "string",
             "const": "cursor",
             "description": "The edit cursor."
+          },
+          {
+            "type": "string",
+            "const": "play",
+            "description": "Where playback (or recording) is, or the edit cursor when stopped."
           }
         ]
       },
@@ -2581,6 +2637,13 @@
               "null"
             ],
             "description": "Renames the take."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Points the take at another file, such as a moved or renamed copy,\nkeeping its offset, rate, and length. Absolute, and checked like\n`items.insert`'s files: errors say which entry in `data`."
           },
           "ext": {
             "type": [

@@ -128,7 +128,7 @@ export class ReaSockClient {
   #pending = new Map<number, Pending>();
   #handlers = new Map<string, Set<Handler<any>>>();
   #connectionHandlers = new Set<(connected: boolean) => void>();
-  #actions = new Map<string, { label: string; handler: Handler<ActionTriggered> }>();
+  #actions = new Map<string, { label: string; handler: Handler<ActionTriggered>; on?: boolean }>();
   #subscriptions = new Map<EventName, Subscription>();
   /** `registerAction()` and `subscribe()` calls waiting for a connection. */
   #waiting = new Set<{ resolve(): void; reject(error: Error): void }>();
@@ -222,12 +222,29 @@ export class ReaSockClient {
    * Adds an action to REAPER's action list and calls `handler` whenever it
    * runs (restored after a reconnect, so hotkeys keep working). While a
    * reconnecting client is disconnected, this waits for the connection.
+   *
+   * With `toggle: true` the action has an on/off state, shown as a checkmark
+   * in menus and a lit toolbar button. It starts off; change it with
+   * `setActionState()`, usually from `handler`.
    */
-  async registerAction(id: string, label: string, handler: Handler<ActionTriggered>): Promise<RegisteredAction> {
+  async registerAction(
+    id: string,
+    label: string,
+    handler: Handler<ActionTriggered>,
+    options: { toggle?: boolean } = {},
+  ): Promise<RegisteredAction> {
     await this.#untilConnected();
-    const registered = await this.call("action.register", { id, label });
-    this.#actions.set(id, { label, handler });
+    const toggle = options.toggle ?? false;
+    const registered = await this.call("action.register", toggle ? { id, label, toggle } : { id, label });
+    this.#actions.set(id, toggle ? { label, handler, on: this.#actions.get(id)?.on ?? false } : { label, handler });
     return registered;
+  }
+
+  /** Turns a toggle action on or off (restored after a reconnect). */
+  async setActionState(id: string, on: boolean): Promise<void> {
+    await this.call("action.setState", { id, on });
+    const action = this.#actions.get(id);
+    if (action) action.on = on;
   }
 
   /** Closes the connection for good: no reconnecting. */
@@ -272,8 +289,13 @@ export class ReaSockClient {
         client,
         token: endpoint.token,
       })) as InitializeResult;
-      for (const [id, { label }] of this.#actions) {
-        await this.call("action.register", { id, label });
+      for (const [id, { label, on }] of this.#actions) {
+        if (on === undefined) {
+          await this.call("action.register", { id, label });
+        } else {
+          await this.call("action.register", { id, label, toggle: true });
+          if (on) await this.call("action.setState", { id, on });
+        }
       }
       if (this.#subscriptions.size > 0) {
         await this.call("events.subscribe", { events: [...this.#subscriptions.values()] });

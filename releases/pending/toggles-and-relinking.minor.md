@@ -1,0 +1,5 @@
+- Protocol 0.5.0: actions can have an on/off state. Register with `toggle: true` and set it with `action.setState`; REAPER shows it as a checkmark in menus and a lit toolbar button. In `@techaudio/reasock`, `registerAction(…, { toggle: true })` and `setActionState()`, restored after a reconnect.
+- `takes.set` can point a take at a moved or renamed file (`path`), keeping its offset, rate, and length, as an undo point.
+- `items.insert` can place files at the play position (`position: "play"`).
+- Fixed: `items.insert` handed new sources to takes through `SetMediaItemTake_Source`, which REAPER asks extensions not to use, since it may duplicate the source.
+- The MCP example can place media files (`reaper_insert_media`).

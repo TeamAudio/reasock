@@ -34,6 +34,7 @@ spawns it the way an agent would and calls the read-only tools.
 | `reaper_markers` | Markers and regions |
 | `reaper_recent_events` | What changed since the last call: edits with their undo descriptions, selection, transport |
 | `reaper_run_action` | Runs any REAPER action by command ID or name |
+| `reaper_insert_media` | Places media files (or parts of them) on the timeline, as one undoable step |
 
 `reaper_run_action` is marked destructive, and its description asks the agent
 to confirm with you before changing your project. MCP clients usually ask for

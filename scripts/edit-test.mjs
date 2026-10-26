@@ -7,7 +7,8 @@
 //   node scripts/edit-test.mjs
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "../examples/reasock-client.mjs";
@@ -72,7 +73,7 @@ await check("initialize lists the methods the server supports", async () => {
   for (const method of ["items.insert", "items.set", "takes.set", "items.list"]) {
     assert.ok(client.session.capabilities.methods.includes(method), method);
   }
-  assert.equal(client.session.protocolVersion, "0.4.0");
+  assert.equal(client.session.protocolVersion, "0.5.0");
 });
 
 await check("transport.get has the edit cursor and time selection", async () => {
@@ -256,6 +257,76 @@ await check("items.set and takes.set write notes, names, and ext as one undo poi
     { code: -32602 },
   );
   for (let i = 0; i < 5; i++) await undo();
+});
+
+await check("takes.set points a take at another file, as one undo point", async () => {
+  const { items } = await client.call("items.insert", { files: [{ path: short, sourceStart: 0.25, length: 1 }], position: 70 });
+  const [item] = items;
+  await client.call("takes.set", { takes: [{ guid: item.takeGuid, path: long }] });
+  let [now] = (await client.call("items.get", { guids: [item.guid] })).items;
+  assert.equal(now.path, long);
+  close(now.startOffset, 0.25, "keeps its offset");
+  close(now.length, 1, "keeps its length");
+  assert.equal(await lastUndo(), "Set take properties (ReaSock: edittest)");
+  await undo();
+  [now] = (await client.call("items.get", { guids: [item.guid] })).items;
+  assert.equal(now.path, short, "undo puts the old file back");
+  await assert.rejects(
+    client.call("takes.set", { takes: [{ guid: item.takeGuid, name: "x" }, { guid: item.takeGuid, path: notMedia }] }),
+    (error) => error.code === -32015 && error.data.index === 1,
+  );
+  assert.equal((await client.call("takes.list", { item: item.guid })).takes[0].name, "short.wav", "nothing changed");
+  await undo();
+});
+
+await check("position: play is the play position while playing, else the edit cursor", async () => {
+  const cursor = (await client.call("transport.get")).editCursor;
+  const stopped = await client.call("items.insert", { files: [{ path: short }], position: "play" });
+  close(stopped.items[0].position, cursor);
+  await undo();
+  await run(1007); // Transport: Play
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const playing = await client.call("items.insert", { files: [{ path: short }], position: "play", track: "new" });
+  await run(1016); // Transport: Stop
+  assert.ok(playing.items[0].position > cursor + 0.05, `${playing.items[0].position} is past the cursor`);
+  await undo();
+});
+
+await check("toggle actions report their state to REAPER", async () => {
+  await client.call("action.register", { id: "toggled", label: "Toggled", toggle: true });
+  await client.call("action.register", { id: "plain", label: "Plain" });
+  // What REAPER itself reports, through a ReaScript (macOS can hand one to the
+  // running REAPER with `open`): -1 no state, 0 off, 1 on.
+  const reaperStates = async () => {
+    if (process.platform !== "darwin") return null;
+    const script = join(dir, "toggle-state.lua");
+    const result = join(dir, "toggle-state.txt");
+    rmSync(result, { force: true });
+    writeFileSync(
+      script,
+      `local f = io.open(${JSON.stringify(result)}, "w")
+for _, id in ipairs({"toggled", "plain"}) do
+  f:write(reaper.GetToggleCommandStateEx(0, reaper.NamedCommandLookup("_REASOCK_edittest_" .. id)), " ")
+end
+f:write("done") f:close()`,
+    );
+    execFileSync("open", ["-a", "REAPER", script]);
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && !(existsSync(result) && readFileSync(result, "utf8").includes("done"))) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return readFileSync(result, "utf8").trim().split(" ").slice(0, 2).map(Number);
+  };
+  const skipIfNoLua = (states, expected, message) => states === null || assert.deepEqual(states, expected, message);
+  skipIfNoLua(await reaperStates(), [0, -1]);
+  await client.call("action.setState", { id: "toggled", on: true });
+  skipIfNoLua(await reaperStates(), [1, -1]);
+  await client.call("action.register", { id: "toggled", label: "Toggled", toggle: true });
+  skipIfNoLua(await reaperStates(), [1, -1], "registering again keeps the state");
+  await assert.rejects(client.call("action.setState", { id: "plain", on: true }), { code: -32602 });
+  await assert.rejects(client.call("action.setState", { id: "missing", on: true }), { code: -32011 });
+  await client.call("action.unregister", { id: "toggled" });
+  await client.call("action.unregister", { id: "plain" });
 });
 
 client.close();

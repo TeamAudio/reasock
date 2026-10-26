@@ -53,8 +53,9 @@ code and served by `rpc.discover`, so it always matches the running server.
 | --- | --- | --- |
 | `initialize` | `{protocolVersion, client: {name, version?}, token?, capabilities?}` | `{protocolVersion, server, reaper, connection, capabilities}` |
 | `rpc.discover` | | the OpenRPC document |
-| `action.register` | `{id, label}` | `{command, commandId}` |
+| `action.register` | `{id, label, toggle?}` | `{command, commandId}` |
 | `action.unregister` | `{id}` | `{}` |
+| `action.setState` | `{id, on}`: for actions registered with `toggle: true` | `{}` |
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
 | `events.subscribe` | `{events: [name or {event, options}…]}` | `{events}`: all current subscriptions |
 | `events.unsubscribe` | `{events: [name…]}` | `{events}` |
@@ -65,7 +66,7 @@ code and served by `rpc.discover`, so it always matches the running server.
 | `items.insert` | `{files: [{path, sourceStart?, length?, name?, notes?, ext?}…], position?, track?, arrange?, …}` | `{items}`: the new items |
 | `items.set` | `{items: [{guid, notes?, ext?}…], undo?}` | `{}` |
 | `takes.list` | `{item, ext?}` | `{item, takes}` |
-| `takes.set` | `{takes: [{guid, name?, ext?}…], undo?}` | `{}` |
+| `takes.set` | `{takes: [{guid, name?, path?, ext?}…], undo?}` | `{}` |
 | `tracks.list` / `tracks.listSelected` | `{offset?, limit?}` | `{count, offset, tracks}` |
 | `tracks.get` | `{guids}` | `{tracks}` |
 | `markers.list` | `{offset?, limit?}` | `{count, offset, markers}`: markers and regions |
@@ -131,11 +132,12 @@ selection up to date.
 ### Changing the project
 
 `items.insert` places media files, or parts of them, on the timeline: at the
-edit cursor or a given time; on a track given by GUID, the current track
+edit cursor, the play position, or a given time; on a track given by GUID, the current track
 (selected, else last touched, as REAPER's own insert does), or a new one; one
 after another, each on its own track, or as takes of one item. Each file can
 bring a take name, item notes, and extension data. `items.set` and
-`takes.set` change notes, take names, and extension data in batches.
+`takes.set` change notes, take names, and extension data in batches, and
+`takes.set` can point a take at a moved or renamed file.
 
 - Every call is one undo point, named after the client unless it passes
   `undo`. Everything is checked before anything changes, so a request with
@@ -157,7 +159,9 @@ bring a take name, item notes, and extension data. `items.set` and
   `startOffset` counts from the end of the file; `path` is still the file.
 
 Actions are named `_REASOCK_<client>_<id>` and are removed when their
-connection closes. Errors use the standard JSON-RPC codes, plus the
+connection closes. An action registered with `toggle: true` has an on/off
+state, shown as a checkmark in menus and a lit toolbar button; the client
+sets it with `action.setState` (running the action doesn't change it). Errors use the standard JSON-RPC codes, plus the
 application codes listed in `openrpc.json` (-32001 not initialized, -32010
 action conflict, -32012 unknown command, and so on).
 
@@ -337,6 +341,10 @@ sandboxed frames from any site send it.
   `items.insert` builds them with `PCM_Source_BuildPeaks`, a slice per timer
   tick: inserting a 10-minute stereo file took 32 ms, and other calls kept
   answering within a tick while its peaks were built.
+- **Set a take's source through `P_SOURCE`.** REAPER's header asks C/C++ code
+  not to use `SetMediaItemTake_Source`, which may duplicate the source. A
+  replaced source is destroyed a couple of seconds later rather than at once,
+  in case playback is still reading it.
 - REAPER's own insert, with no track selected, uses the last touched track;
   `items.insert`'s default `current` track does the same.
 - **Listing items costs ~2.5 µs each.** On a 16,384-item project, a page of
@@ -355,14 +363,18 @@ sandboxed frames from any site send it.
   and enforce a constraint. Full JSON Schema validation (`jsonschema`) was
   measured at +58 crates and roughly 4x the extension's size, so it's ruled
   out.
-- Tell: more events (markers, tempo, a finished render if REAPER offers a
-  hook). Fast, per-track changes such as volume and FX parameters probably
-  belong on a control surface (`csurf_inst`) rather than polling.
-- Lend: actions with an on/off state (a checkmark in menus and toolbars).
+- Tell: more events (markers, tempo). Fast, per-track changes such as volume
+  and FX parameters probably belong on a control surface (`csurf_inst`)
+  rather than polling.
+- A finished-render event needs more than polling. REAPER has no render hook;
+  `EnumProjects(0x40000000)` reports a render in progress, but the timer runs
+  about once per render (a 0.6 s render showed one tick), so short renders
+  would be missed. `RENDER_STATS` lists the rendered files only when a
+  preference is on, and asking for it otherwise opens a dialog. Watching the
+  render actions with `hookpostcommand` would catch renders started from
+  actions, but not the Render button in the render dialog.
 - Ask: more of REAPER's model (FX, envelopes, routing) following the paged,
-  GUID-keyed pattern of `items.list` and `items.get`; more writes, such as
-  pointing a take at a moved or renamed file, and inserting at the play
-  position.
+  GUID-keyed pattern of `items.list` and `items.get`.
 - Launch-on-trigger: remember which client owns which actions and start it if
   it's offline.
 

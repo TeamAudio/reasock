@@ -10,17 +10,18 @@ use crate::api::not_found;
 use crate::model;
 use crate::protocol::{RpcError, MEDIA_UNAVAILABLE, NOT_FOUND};
 use crate::types::{
-    Arrange, Empty, ExtKey, InsertFile, InsertParams, InsertPosition, Inserted, SetItemsParams,
-    SetTakesParams, TrackKeyword, TrackTarget, MAX_EXT_VALUE,
+    Arrange, Empty, ExtKey, InsertFile, InsertParams, InsertPosition, Inserted, PositionKeyword,
+    SetItemsParams, SetTakesParams, TrackKeyword, TrackTarget, MAX_EXT_VALUE,
 };
 use reaper_low::raw;
 use reaper_medium::{MediaItem, Reaper};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_void, CString};
 use std::path::Path;
 use std::ptr::null_mut;
+use std::time::{Duration, Instant};
 
 /// The most files one `items.insert` call takes.
 pub const MAX_INSERT_FILES: usize = 1000;
@@ -277,16 +278,32 @@ fn seconds(source: &Source, position: f64) -> f64 {
     }
 }
 
+/// Hands `source` to `take`, which then owns it. Through `P_SOURCE`, as
+/// REAPER asks of C/C++ code: `SetMediaItemTake_Source` may duplicate the
+/// source instead. A source the take had before is retired, not destroyed
+/// at once, since playback may still be reading it.
+///
+/// # Safety
+/// `take` must be a valid take in the current project.
+unsafe fn set_source(take: *mut raw::MediaItem_Take, source: &mut Source) {
+    let low = Reaper::get().low();
+    let old = low.GetSetMediaItemTakeInfo(take, c"P_SOURCE".as_ptr(), null_mut()) as *mut raw::PCM_source;
+    low.GetSetMediaItemTakeInfo(take, c"P_SOURCE".as_ptr(), source.pcm as *mut c_void);
+    source.pcm = null_mut();
+    if !old.is_null() {
+        RETIRED.with_borrow_mut(|retired| retired.push((old, Instant::now())));
+    }
+    start_peaks(take);
+}
+
 /// Adds a take playing `source` to `item`, which then owns the source.
 fn add_take(item: *mut raw::MediaItem, source: &mut Source) -> *mut raw::MediaItem_Take {
     let low = Reaper::get().low();
     unsafe {
         let take = low.AddTakeToMediaItem(item);
-        low.SetMediaItemTake_Source(take, source.pcm);
-        source.pcm = null_mut();
+        set_source(take, source);
         low.SetMediaItemTakeInfo_Value(take, c"D_STARTOFFS".as_ptr(), source.start);
         low.GetSetMediaItemTakeInfo_String(take, c"P_NAME".as_ptr(), setter(&source.take_name), true);
-        start_peaks(take);
         take
     }
 }
@@ -320,7 +337,11 @@ pub fn insert(client: &str, params: InsertParams) -> Result<Inserted, RpcError> 
         )));
     }
     let position = match params.position {
-        None | Some(InsertPosition::Keyword(_)) => None,
+        None | Some(InsertPosition::Keyword(PositionKeyword::Cursor)) => None,
+        Some(InsertPosition::Keyword(PositionKeyword::Play)) => {
+            let state = Reaper::get().get_play_state_ex(reaper_medium::ProjectContext::CurrentProject);
+            (state.is_playing || state.is_recording).then(|| unsafe { low.GetPlayPositionEx(null_mut()) })
+        }
         Some(InsertPosition::Seconds(seconds)) if seconds >= 0.0 && seconds.is_finite() => Some(seconds),
         Some(InsertPosition::Seconds(_)) => {
             return Err(RpcError::invalid_params("position must be at least 0"));
@@ -458,38 +479,41 @@ unsafe fn write_item_extras(item: *mut raw::MediaItem, notes: Option<&CString>, 
 // ---------------------------------------------------------------------------
 // Peaks
 
+/// How long a replaced source is kept before it's destroyed.
+const RETIRE_AFTER: Duration = Duration::from_secs(2);
+
 thread_local! {
-    /// Takes inserted by `items.insert` whose peaks are still being built.
-    /// Main thread only, like everything that touches the project.
-    static BUILDING_PEAKS: RefCell<Vec<*mut raw::MediaItem_Take>> = const { RefCell::new(Vec::new()) };
+    /// Takes whose peaks are still being built, with the source they were
+    /// started for. Main thread only, like everything that touches the project.
+    static BUILDING_PEAKS: RefCell<Vec<(*mut raw::MediaItem_Take, *mut raw::PCM_source)>> =
+        const { RefCell::new(Vec::new()) };
+    /// Sources replaced by `takes.set`, destroyed after `RETIRE_AFTER`.
+    static RETIRED: RefCell<Vec<(*mut raw::PCM_source, Instant)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Starts building peaks for a new take's source, if it has none. REAPER
+/// Starts building peaks for a take's new source, if it has none. REAPER
 /// doesn't do this for sources created through its API, and building them all
-/// at once could stall REAPER on long files, so `build_peaks` continues a
-/// slice at a time.
+/// at once could stall REAPER on long files, so `tick` continues a slice at a
+/// time.
 fn start_peaks(take: *mut raw::MediaItem_Take) {
     let low = Reaper::get().low();
     unsafe {
         let source = low.GetMediaItemTake_Source(take);
         if !source.is_null() && low.PCM_Source_BuildPeaks(source, 0) != 0 {
-            BUILDING_PEAKS.with_borrow_mut(|takes| takes.push(take));
+            BUILDING_PEAKS.with_borrow_mut(|jobs| jobs.push((take, source)));
         }
     }
 }
 
-/// Continues building peaks, a slice per take per timer tick. Takes that no
-/// longer exist (the insert was undone, say) are dropped.
-pub fn build_peaks() {
-    BUILDING_PEAKS.with_borrow_mut(|takes| {
-        if takes.is_empty() {
-            return;
-        }
-        let low = Reaper::get().low();
-        takes.retain(|&take| unsafe {
+/// Runs every timer tick: continues building peaks, a slice per take, and
+/// destroys retired sources. A job is dropped when its take no longer exists
+/// (the insert was undone, say) or has a different source by now.
+pub fn tick() {
+    let low = Reaper::get().low();
+    BUILDING_PEAKS.with_borrow_mut(|jobs| {
+        jobs.retain(|&(take, source)| unsafe {
             let exists = low.ValidatePtr2(null_mut(), take.cast(), c"MediaItem_Take*".as_ptr());
-            let source = if exists { low.GetMediaItemTake_Source(take) } else { null_mut() };
-            if source.is_null() {
+            if !exists || low.GetMediaItemTake_Source(take) != source {
                 return false;
             }
             if low.PCM_Source_BuildPeaks(source, 1) != 0 {
@@ -497,6 +521,15 @@ pub fn build_peaks() {
             }
             low.PCM_Source_BuildPeaks(source, 2);
             low.UpdateItemInProject(low.GetMediaItemTake_Item(take));
+            false
+        });
+    });
+    RETIRED.with_borrow_mut(|retired| {
+        retired.retain(|&(source, since)| {
+            if since.elapsed() < RETIRE_AFTER {
+                return true;
+            }
+            unsafe { low.PCM_Source_Destroy(source) };
             false
         });
     });
@@ -573,6 +606,12 @@ pub fn set_takes(client: &str, params: SetTakesParams) -> Result<Empty, RpcError
         .iter()
         .map(|take| changes(take.name.as_deref(), "name", take.ext.as_ref()))
         .collect::<Result<Vec<_>, RpcError>>()?;
+    let checked_paths = params.takes.iter().filter(|take| take.path.is_some()).count();
+    if checked_paths > MAX_INSERT_FILES {
+        return Err(RpcError::invalid_params(format!(
+            "at most {MAX_INSERT_FILES} takes can change file in one call"
+        )));
+    }
     let found = model::find_takes(params.takes.iter().map(|take| take.guid.as_str()));
     let takes = params
         .takes
@@ -584,10 +623,31 @@ pub fn set_takes(client: &str, params: SetTakesParams) -> Result<Empty, RpcError
                 .ok_or_else(|| not_found("take", &take.guid))
         })
         .collect::<Result<Vec<_>, RpcError>>()?;
+    // Open the new files last: they're the costliest check.
+    let mut sources = Sources(Vec::new());
+    let mut source_of = vec![None; params.takes.len()];
+    for (index, take) in params.takes.iter().enumerate() {
+        if let Some(path) = &take.path {
+            let file = InsertFile {
+                path: path.clone(),
+                source_start: None,
+                length: None,
+                name: None,
+                notes: None,
+                ext: None,
+            };
+            source_of[index] = Some(sources.0.len());
+            sources.0.push(open(index, &file)?);
+        }
+    }
     let low = Reaper::get().low();
     undoable(&undo, || {
-        for (take, changes) in takes.iter().zip(&checked) {
+        for (index, (take, changes)) in takes.iter().zip(&checked).enumerate() {
             unsafe {
+                if let Some(source) = source_of[index] {
+                    set_source(take.as_ptr(), &mut sources.0[source]);
+                    low.UpdateItemInProject(low.GetMediaItemTake_Item(take.as_ptr()));
+                }
                 if let Some(name) = &changes.text {
                     low.GetSetMediaItemTakeInfo_String(take.as_ptr(), c"P_NAME".as_ptr(), setter(name), true);
                 }

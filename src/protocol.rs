@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-pub const PROTOCOL_VERSION: &str = "0.4.0";
+pub const PROTOCOL_VERSION: &str = "0.5.0";
 
 /// An application error: a code outside JSON-RPC's reserved range, with a
 /// name for the OpenRPC document.

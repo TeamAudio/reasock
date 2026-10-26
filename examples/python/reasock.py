@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 from websockets.sync.client import connect as ws_connect
 
-PROTOCOL_VERSION = "0.4.0"
+PROTOCOL_VERSION = "0.5.0"
 
 
 class RpcError(Exception):

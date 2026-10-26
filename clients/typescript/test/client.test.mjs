@@ -18,7 +18,7 @@ test("initializes with the protocol version and token", async () => {
   const server = new FakeReaSock();
   const client = await connect(server, { version: "1.2" });
   assert.equal(server.calls[0].method, "initialize");
-  assert.deepEqual(server.calls[0].params, { protocolVersion: "0.4.0", client: { name: "test", version: "1.2" }, token: "secret" });
+  assert.deepEqual(server.calls[0].params, { protocolVersion: "0.5.0", client: { name: "test", version: "1.2" }, token: "secret" });
   assert.equal(client.session.server.name, "reasock");
   client.close();
 });
@@ -237,4 +237,20 @@ test("closing or aborting a waiting client stops it", async () => {
   const attempts = server.sockets.length;
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(server.sockets.length, attempts, "no more attempts");
+});
+
+test("toggle actions keep their state across a reconnect", async () => {
+  const server = new FakeReaSock();
+  const client = await connect(server, { reconnect: { minDelayMs: 10 } });
+  await client.registerAction("follow", "Follow", () => {}, { toggle: true });
+  assert.equal(server.calls.at(-1).params.toggle, true);
+  await client.setActionState("follow", true);
+  const changes = [];
+  client.onConnectionChange((connected) => changes.push(connected));
+  server.actions.clear();
+  server.toggles.clear();
+  server.socket.close();
+  await until(() => changes.length === 2);
+  assert.equal(server.toggles.get("follow"), true);
+  client.close();
 });

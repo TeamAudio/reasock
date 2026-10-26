@@ -2,7 +2,7 @@
 // run `npm run generate` after the protocol changes.
 
 /** The protocol version these types describe. */
-export const PROTOCOL_VERSION = "0.4.0";
+export const PROTOCOL_VERSION = "0.5.0";
 
 export interface ActionCapabilities {
   register: boolean;
@@ -274,7 +274,7 @@ export interface MarkersPage {
   markers: Marker[];
 }
 
-export type PositionKeyword = "cursor";
+export type PositionKeyword = "cursor" | "play";
 
 /** Params of `project.changed`. */
 export interface Project {
@@ -352,6 +352,12 @@ export interface TakeChanges {
   guid: string;
   /** Renames the take. */
   name?: string | null;
+  /**
+   * Points the take at another file, such as a moved or renamed copy,
+   * keeping its offset, rate, and length. Absolute, and checked like
+   * `items.insert`'s files: errors say which entry in `data`.
+   */
+  path?: string | null;
   /** Sets each key to its value (at most 64 KiB), or removes it when null. */
   ext?: { [key: string]: string | null } | null;
 }
@@ -480,6 +486,11 @@ export interface Methods {
       id: string;
       /** Shown in the action list as `ReaSock (<client>): <label>`. */
       label: string;
+      /**
+       * Give the action an on/off state, shown as a checkmark in menus and a
+       * lit toolbar button. It starts off; set it with `action.setState`.
+       */
+      toggle?: boolean | null;
     };
     result: RegisteredAction;
   };
@@ -487,6 +498,18 @@ export interface Methods {
   "action.unregister": {
     params: {
       id: string;
+    };
+    result: Empty;
+  };
+  /**
+   * Turn one of this connection's toggle actions on or off
+   * 
+   * For actions registered with `toggle: true`. REAPER shows the state as a checkmark in menus and a lit toolbar button. Running the action doesn't change its state by itself: the client decides, usually when it receives `action.triggered`.
+   */
+  "action.setState": {
+    params: {
+      id: string;
+      on: boolean;
     };
     result: Empty;
   };
@@ -589,8 +612,9 @@ export interface Methods {
       /** In the order they're placed. */
       files: InsertFile[];
       /**
-       * Where the files start: seconds from the project start, or `cursor` for
-       * the edit cursor. Defaults to `cursor`.
+       * Where the files start: seconds from the project start, `cursor` for
+       * the edit cursor, or `play` for the play position (the edit cursor when
+       * stopped). Defaults to `cursor`.
        */
       position?: InsertPosition | null;
       /**
@@ -642,9 +666,9 @@ export interface Methods {
     result: Empty;
   };
   /**
-   * Rename takes and change their extension data
+   * Rename takes, relink their files, and change their extension data
    * 
-   * Works like `items.set`, for takes.
+   * Works like `items.set`, for takes. `path` points a take at another file, such as one that was moved or renamed; peaks for it are built in the background.
    */
   "takes.set": {
     params: {
