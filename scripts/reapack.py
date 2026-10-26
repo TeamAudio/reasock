@@ -39,6 +39,7 @@ ASSETS = [
     ("data", "reasock/licenses/karla-LICENSE.txt", "karla-LICENSE.txt", "docs/licenses"),
     ("data", "reasock/licenses/roboto-slab-LICENSE.txt", "roboto-slab-LICENSE.txt", "docs/licenses"),
     ("script main", "ReaSock/ReaSock_Follow selection.lua", "follow-selection.lua", "examples/lua"),
+    ("script main", "ReaSock/ReaSock_Inspector panel.lua", "inspector-panel.lua", "examples/lua"),
     ("script", "ReaSock/json.lua", "json.lua", "examples/lua"),
 ]
 
@@ -55,6 +56,9 @@ that speaks JSON-RPC 2.0, so tools outside REAPER can:
 
 Scripts inside REAPER can use the same protocol through ReaSock_Open,
 ReaSock_Call, and ReaSock_Poll.
+
+**ReaSock_Inspector panel** (needs ReaImGui) shows the project, transport,
+and selection live, as an example of using ReaSock from a script.
 
 Run **ReaSock: Open API documentation** from the Actions list, or call
 `reaper.ReaSock_OpenDocs()`, for the full reference.

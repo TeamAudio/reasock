@@ -1,0 +1,1 @@
+- Examples: Python (a hotkey to copy selected items' file paths, a selection follower), an MCP server for AI agents, shell helpers with websocat, and a ReaImGui inspector panel, which also ships in the ReaPack package.
