@@ -9,6 +9,7 @@ own projects.
 | [`inspector.mjs`](inspector.mjs) | Node | Following every event as you work |
 | [`reasock-client.mjs`](reasock-client.mjs) | Node | A dependency-free client with `mirrorSelection()` |
 | [`python/`](python/) | Python | A client library; copying selected items' paths with a hotkey; following the selection |
+| [`mcp/`](mcp/) | Node | An MCP server so AI agents (Claude Code, Claude Desktop) can inspect and drive REAPER |
 | [`lua/`](lua/) | Lua (ReaScript) | Following the selection from a script inside REAPER |
 
 Clients outside REAPER find it through `~/.reasock/instances/<pid>.json`,
