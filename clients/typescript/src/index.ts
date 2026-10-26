@@ -1,13 +1,23 @@
 // Node entry point: finds the running REAPER and its token through
 // ~/.reasock/instances. Browsers get ./browser.js instead.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ReaSockClient, type ClientOptions, type Endpoint } from "./core.js";
 
 export * from "./generated.js";
-export { ReaSockClient, RpcError, type ClientOptions, type Endpoint, type Params, type ReconnectOptions, type Result } from "./core.js";
+export {
+  NotConnectedError,
+  ReaSockClient,
+  RpcError,
+  TimeoutError,
+  type ClientOptions,
+  type Endpoint,
+  type Params,
+  type ReconnectOptions,
+  type Result,
+} from "./core.js";
 export { mirrorSelection, type MirrorOptions, type SelectionMirror } from "./mirror.js";
 
 /** A running REAPER, as announced in its instance file. */
@@ -58,4 +68,45 @@ export function findInstance(): Instance {
  */
 export function connect(options: Omit<ClientOptions, "endpoint"> & { endpoint?: ClientOptions["endpoint"] }) {
   return ReaSockClient.connect({ ...options, endpoint: options.endpoint ?? findInstance });
+}
+
+/**
+ * Returns a client right away and connects in the background: it waits for
+ * REAPER to start (watching ~/.reasock/instances), then reconnects whenever
+ * the connection drops. `registerAction()` and `subscribe()` wait for the
+ * connection; other calls reject with `NotConnectedError` until then.
+ *
+ *     const reasock = createClient({ name: "myapp" });
+ *     reasock.onConnectionChange((connected) => updateStatus(connected));
+ *     void reasock.registerAction("send", "Send selection to My App", handleSend);
+ */
+export function createClient(options: Omit<ClientOptions, "endpoint"> & { endpoint?: ClientOptions["endpoint"] }) {
+  return ReaSockClient.create({
+    ...options,
+    endpoint: options.endpoint ?? findInstance,
+    watch: options.watch ?? watchInstances,
+  });
+}
+
+/** Calls `retryNow` when an instance file appears; see `ClientOptions.watch`. */
+function watchInstances(retryNow: () => void): () => void {
+  const base = join(homedir(), ".reasock");
+  const instances = join(base, "instances");
+  const dir = existsSync(instances) ? instances : existsSync(base) ? base : null;
+  if (!dir) return () => {};
+  try {
+    // REAPER writes the file and then fills it in, so wait a moment before retrying.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const watcher = watch(dir, () => {
+      clearTimeout(timer);
+      timer = setTimeout(retryNow, 200);
+    });
+    watcher.unref();
+    return () => {
+      clearTimeout(timer);
+      watcher.close();
+    };
+  } catch {
+    return () => {};
+  }
 }

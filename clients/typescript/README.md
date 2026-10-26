@@ -36,15 +36,46 @@ const selection = await mirrorSelection(reasock, "items", {
 });
 ```
 
-- `call()` rejects with `RpcError`, whose `code` matches `ErrorCode`
-  (`ErrorCode.NotFound`, …), or with an `Error` on timeout or disconnect.
-  Calls time out after 5 s by default; REAPER can't answer while a modal
-  dialog is open.
+- `call()` rejects with one of three errors:
+  - `RpcError`: ReaSock refused the call. Its `code` matches `ErrorCode`
+    (`ErrorCode.NotFound`, …), and some errors carry `data`, such as which
+    file `items.insert` couldn't use.
+  - `TimeoutError`: no answer in time, 5 s by default. REAPER can't answer
+    while a modal dialog is open, so this usually means "REAPER is busy".
+  - `NotConnectedError`: REAPER isn't running or the connection dropped.
+    Calls fail with it at once instead of waiting for the timeout.
 - With `reconnect: true` the client reconnects after REAPER restarts, finding
   the new token, and restores what `registerAction()` and `subscribe()` set
-  up. `onConnectionChange()` reports drops and recoveries.
+  up. `onConnectionChange()` reports drops and recoveries. The client stays
+  with the REAPER it connected to; when that one goes away it reconnects to
+  the most recently started one.
+- `supports("items.insert")` says whether the connected ReaSock has a method,
+  so an app can hide features an older ReaSock lacks.
 - `on()` returns a function that removes the handler; `subscribe()` returns
   one that unsubscribes.
+
+## Apps that start before REAPER
+
+`connect()` fails if REAPER isn't running. A long-running app can use
+`createClient()` instead: it returns a client at once and connects in the
+background, picking up REAPER as soon as it starts (it watches
+`~/.reasock/instances`), then reconnects whenever needed.
+`registerAction()` and `subscribe()` wait for the connection, so they can be
+set up right away; other calls fail with `NotConnectedError` until then.
+`close()`, or aborting the `signal` option, stops it.
+
+```ts
+import { createClient } from "@techaudio/reasock";
+
+const reasock = createClient({ name: "myapp" });
+reasock.onConnectionChange((connected) => showStatus(connected ? "REAPER connected" : "waiting for REAPER"));
+void reasock.registerAction("send", "Send selected items to My App", ({ context }) => send(context.selectedItems));
+```
+
+Only one connection at a time can use a client name, and REAPER stores
+hotkeys by action name (`_REASOCK_<name>_<id>`). So a development build
+running beside an installed one needs a different name, and hotkeys bound to
+one build's actions won't trigger the other's.
 
 ## In the browser
 

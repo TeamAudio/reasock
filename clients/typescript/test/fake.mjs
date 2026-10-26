@@ -11,6 +11,7 @@ export class FakeReaSock {
     this.actions = new Set();
     this.subscriptions = new Set();
     this.hang = new Set(); // methods that never answer
+    this.methods = ["initialize", "items.insert", "items.list"];
     const server = this;
     this.WebSocket = class {
       constructor(url) {
@@ -65,7 +66,14 @@ export class FakeReaSock {
     switch (method) {
       case "initialize":
         if (params.token !== this.token) return fail(-32003, "missing or wrong token");
-        return ok({ protocolVersion: "0.3.0", server: { name: "reasock", version: "test" }, reaper: { version: "test" }, connection: this.sockets.length, capabilities: {} });
+        return ok({
+          protocolVersion: this.methods ? "0.4.0" : "0.3.0",
+          server: { name: "reasock", version: "test" },
+          reaper: { version: "test" },
+          connection: this.sockets.length,
+          // A 0.3 server (methods: null) doesn't list its methods.
+          capabilities: this.methods ? { methods: this.methods } : {},
+        });
       case "action.register":
         if (!/^[A-Za-z0-9]{1,32}$/.test(params.id)) return fail(-32602, "invalid action id");
         this.actions.add(params.id);
@@ -81,6 +89,8 @@ export class FakeReaSock {
         return ok({ events: [...this.subscriptions] });
       case "takes.list":
         return fail(-32014, "no item with that GUID");
+      case "items.insert":
+        return this.reply(socket, { id, error: { code: -32015, message: "no such file: /x.wav", data: { index: 0, path: "/x.wav", reason: "no such file" } } });
       default:
         return ok({ echo: method, params });
     }

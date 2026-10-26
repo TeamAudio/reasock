@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ErrorCode, ReaSockClient, RpcError } from "../dist/browser.js";
+import { createClient, ErrorCode, NotConnectedError, ReaSockClient, RpcError, TimeoutError } from "../dist/browser.js";
 import { FakeReaSock } from "./fake.mjs";
 
 const connect = (server, options = {}) =>
@@ -18,7 +18,7 @@ test("initializes with the protocol version and token", async () => {
   const server = new FakeReaSock();
   const client = await connect(server, { version: "1.2" });
   assert.equal(server.calls[0].method, "initialize");
-  assert.deepEqual(server.calls[0].params, { protocolVersion: "0.3.0", client: { name: "test", version: "1.2" }, token: "secret" });
+  assert.deepEqual(server.calls[0].params, { protocolVersion: "0.4.0", client: { name: "test", version: "1.2" }, token: "secret" });
   assert.equal(client.session.server.name, "reasock");
   client.close();
 });
@@ -52,7 +52,7 @@ test("calls time out when REAPER doesn't answer", async () => {
   const server = new FakeReaSock();
   const client = await connect(server, { timeoutMs: 50 });
   server.hang.add("project.get");
-  await assert.rejects(client.call("project.get"), /timed out/);
+  await assert.rejects(client.call("project.get"), (error) => error instanceof TimeoutError);
   client.close();
 });
 
@@ -87,8 +87,10 @@ test("pending calls fail when the connection drops", async () => {
   server.hang.add("project.get");
   const call = client.call("project.get");
   server.socket.close();
-  await assert.rejects(call, /closed/);
+  await assert.rejects(call, (error) => error instanceof NotConnectedError);
   assert.equal(client.connected, false);
+  // And later calls fail at once rather than timing out.
+  await assert.rejects(client.call("project.get"), (error) => error instanceof NotConnectedError);
 });
 
 test("reconnects, restoring actions and subscriptions, with a fresh endpoint", async () => {
@@ -155,4 +157,84 @@ test("actions and subscriptions REAPER refused aren't restored on reconnect", as
   assert.deepEqual([...server.actions], ["hello"]);
   assert.deepEqual([...server.subscriptions], ["transport.changed"]);
   client.close();
+});
+
+test("error data reaches RpcError", async () => {
+  const server = new FakeReaSock();
+  const client = await connect(server);
+  await assert.rejects(
+    client.call("items.insert", { files: [{ path: "/x.wav" }] }),
+    (error) => error instanceof RpcError && error.code === ErrorCode.MediaUnavailable && error.data.index === 0,
+  );
+  client.close();
+});
+
+test("supports() reads the server's methods, or assumes protocol 0.3", async () => {
+  const server = new FakeReaSock();
+  const client = await connect(server);
+  assert.equal(client.supports("items.insert"), true);
+  assert.equal(client.supports("items.set"), false);
+  client.close();
+  assert.equal(client.supports("items.insert"), false, "not while disconnected");
+
+  const old = new FakeReaSock();
+  old.methods = null;
+  const oldClient = await connect(old);
+  assert.equal(oldClient.supports("items.list"), true);
+  assert.equal(oldClient.supports("items.insert"), false);
+  oldClient.close();
+});
+
+test("createClient waits for REAPER, queuing actions and subscriptions", async () => {
+  const server = new FakeReaSock();
+  server.refuse = true;
+  let retryNow;
+  const client = createClient({
+    name: "test",
+    endpoint: { port: 1, token: server.token },
+    WebSocket: server.WebSocket,
+    reconnect: { minDelayMs: 60_000 },
+    watch: (retry) => {
+      retryNow = retry;
+      return () => (retryNow = undefined);
+    },
+  });
+  const changes = [];
+  client.onConnectionChange((connected) => changes.push(connected));
+  await until(() => server.sockets.length === 1);
+  assert.equal(client.connected, false);
+  await assert.rejects(client.call("project.get"), (error) => error instanceof NotConnectedError);
+  const registered = client.registerAction("hello", "Hello", () => {});
+  const subscribed = client.subscribe("transport.changed");
+
+  // REAPER starts; the watcher retries without waiting out the long delay.
+  server.refuse = false;
+  retryNow();
+  assert.equal((await registered).command, "_REASOCK_test_hello");
+  await subscribed;
+  assert.deepEqual(changes, [true]);
+  assert.ok(server.actions.has("hello"));
+  assert.ok(server.subscriptions.has("transport.changed"));
+  assert.equal(retryNow, undefined, "stops watching once connected");
+  client.close();
+});
+
+test("closing or aborting a waiting client stops it", async () => {
+  const server = new FakeReaSock();
+  server.refuse = true;
+  const controller = new AbortController();
+  const client = createClient({
+    name: "test",
+    endpoint: { port: 1, token: server.token },
+    WebSocket: server.WebSocket,
+    reconnect: { minDelayMs: 10 },
+    signal: controller.signal,
+  });
+  const registered = client.registerAction("hello", "Hello", () => {});
+  await until(() => server.sockets.length >= 2);
+  controller.abort();
+  await assert.rejects(registered, (error) => error instanceof NotConnectedError);
+  const attempts = server.sockets.length;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(server.sockets.length, attempts, "no more attempts");
 });

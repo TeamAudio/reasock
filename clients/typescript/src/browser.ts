@@ -5,10 +5,25 @@
 import { ReaSockClient, type ClientOptions } from "./core.js";
 
 export * from "./generated.js";
-export { ReaSockClient, RpcError, type ClientOptions, type Endpoint, type Params, type ReconnectOptions, type Result } from "./core.js";
+export {
+  NotConnectedError,
+  ReaSockClient,
+  RpcError,
+  TimeoutError,
+  type ClientOptions,
+  type Endpoint,
+  type Params,
+  type ReconnectOptions,
+  type Result,
+} from "./core.js";
 export { mirrorSelection, type MirrorOptions, type SelectionMirror } from "./mirror.js";
 
 /** Connects to REAPER at the given endpoint (port and token). */
 export function connect(options: ClientOptions) {
   return ReaSockClient.connect(options);
+}
+
+/** Returns a client right away and connects in the background, retrying until REAPER answers. */
+export function createClient(options: ClientOptions) {
+  return ReaSockClient.create(options);
 }
