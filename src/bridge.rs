@@ -23,8 +23,10 @@ use reaper_medium::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{c_char, c_int, c_void, CString};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 struct Connection {
     /// Set by `initialize`; used to namespace this connection's actions.
@@ -110,6 +112,7 @@ pub extern "C" fn on_timer() {
         for message in pending {
             handle_inbound(message);
         }
+        close_idle_locals();
         poll_events();
     });
     if result.is_err() {
@@ -546,4 +549,139 @@ fn poll_events() {
         }
     }
     tracker.stats.record_tick(started.elapsed());
+}
+
+// ---------------------------------------------------------------------------
+// Local connections, for ReaScripts (see `lua`)
+
+/// A connection opened from inside REAPER. Its messages arrive through
+/// `poll_local` instead of a socket.
+struct Local {
+    inbox: Receiver<String>,
+    last_used: Instant,
+}
+
+static LOCALS: Mutex<Option<HashMap<ConnId, Local>>> = Mutex::new(None);
+/// Above any id the WebSocket server will hand out, and still fits a Lua int.
+static NEXT_LOCAL: AtomicU64 = AtomicU64::new(1 << 30);
+/// Scripts can stop without closing their connection; reclaim it after this.
+const LOCAL_IDLE: Duration = Duration::from_secs(10);
+
+fn with_locals<R>(f: impl FnOnce(&mut HashMap<ConnId, Local>) -> R) -> R {
+    f(lock(&LOCALS).get_or_insert_with(HashMap::new))
+}
+
+/// Marks a local connection as in use. False if it doesn't exist.
+fn touch_local(conn: ConnId) -> bool {
+    with_locals(|locals| match locals.get_mut(&conn) {
+        Some(local) => {
+            local.last_used = Instant::now();
+            true
+        }
+        None => false,
+    })
+}
+
+/// Handles one JSON-RPC text for `conn`. No lock is held while it runs: an
+/// action it runs may start a script that calls back into ReaSock.
+fn handle_local(conn: ConnId, text: &str) -> Option<String> {
+    protocol::handle_text(text, |method, params| api::call(conn, method, params))
+}
+
+fn error_reply(code: i64, message: &str) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": { "code": code, "message": message },
+    })
+    .to_string()
+}
+
+/// Opens a local connection and initializes it as `client`.
+pub fn open_local(client: &str) -> Result<ConnId, String> {
+    let conn = NEXT_LOCAL.fetch_add(1, Ordering::Relaxed);
+    let (outbox, inbox) = mpsc::channel();
+    handle_inbound(Inbound::Connected { conn, outbox });
+    with_locals(|locals| {
+        let last_used = Instant::now();
+        locals.insert(conn, Local { inbox, last_used })
+    });
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": protocol::PROTOCOL_VERSION,
+            "client": { "name": client },
+        },
+    });
+    let reply = handle_local(conn, &request.to_string()).unwrap_or_default();
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap_or_default();
+    if let Some(message) = reply["error"]["message"].as_str() {
+        close_local(conn);
+        return Err(message.to_owned());
+    }
+    log!("conn {conn}: local connection opened");
+    Ok(conn)
+}
+
+/// Runs one method on a local connection and returns the JSON-RPC response.
+pub fn call_local(conn: ConnId, method: &str, params: &str) -> String {
+    if !touch_local(conn) {
+        return error_reply(-32600, "unknown connection; call ReaSock_Open first");
+    }
+    let params = if params.trim().is_empty() {
+        serde_json::Value::Object(Default::default())
+    } else {
+        match serde_json::from_str(params) {
+            Ok(params) => params,
+            Err(error) => return error_reply(-32700, &format!("params: {error}")),
+        }
+    };
+    let request = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+    handle_local(conn, &request.to_string()).unwrap_or_default()
+}
+
+/// Handles any JSON-RPC text on a local connection; replies are queued for
+/// `poll_local`. False if the connection doesn't exist.
+pub fn send_local(conn: ConnId, text: &str) -> bool {
+    if !touch_local(conn) {
+        return false;
+    }
+    if let Some(reply) = handle_local(conn, text) {
+        send(conn, reply);
+    }
+    true
+}
+
+/// The next queued message for a local connection, or an empty string.
+pub fn poll_local(conn: ConnId) -> String {
+    with_locals(|locals| {
+        let Some(local) = locals.get_mut(&conn) else {
+            return String::new();
+        };
+        local.last_used = Instant::now();
+        local.inbox.try_recv().unwrap_or_default()
+    })
+}
+
+pub fn close_local(conn: ConnId) {
+    if with_locals(|locals| locals.remove(&conn)).is_some() {
+        disconnect(conn);
+        log!("conn {conn}: local connection closed");
+    }
+}
+
+fn close_idle_locals() {
+    let idle: Vec<ConnId> = with_locals(|locals| {
+        locals
+            .iter()
+            .filter(|(_, local)| local.last_used.elapsed() > LOCAL_IDLE)
+            .map(|(&conn, _)| conn)
+            .collect()
+    });
+    for conn in idle {
+        log!("conn {conn}: idle local connection");
+        close_local(conn);
+    }
 }

@@ -4,6 +4,7 @@ mod collection;
 mod discovery;
 mod events;
 mod log;
+mod lua;
 mod model;
 mod protocol;
 mod server;
@@ -28,6 +29,7 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     session.plugin_register_add_hook_command_2::<bridge::Hook>()?;
     session.plugin_register_add_timer(bridge::on_timer)?;
     session.plugin_register_add_at_exit(on_exit)?;
+    lua::register(&mut session)?;
 
     let reaper_version = model::reaper_version();
     let instance = discovery::write(port, &reaper_version)?;

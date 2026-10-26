@@ -20,7 +20,8 @@ This is a spike. It proves Lend end to end, plus the smallest Ask (`action.run`)
 # restart REAPER
 node examples/hello.mjs      # registers "ReaSock (demo): Hello"
 node examples/hello.mjs --self-test
-node scripts/smoke-test.mjs  # protocol checks against the running REAPER
+node scripts/smoke-test.mjs  # protocol checks against the running REAPER,
+                             # plus the ReaScript API on macOS
 cargo test                   # envelope tests, no REAPER needed
 ```
 
@@ -113,6 +114,32 @@ connection closes. Errors use the standard JSON-RPC codes, plus the
 application codes listed in `openrpc.json` (-32001 not initialized, -32010
 action conflict, -32012 unknown command, and so on).
 
+## ReaScript
+
+Scripts inside REAPER use the same protocol through a local connection, so
+every method and event works the same way it does for WebSocket clients:
+
+```lua
+local conn = reaper.ReaSock_Open("myscript")            -- 0 if it failed
+local reply = reaper.ReaSock_Call(conn, "tracks.list", '{"limit": 10}')
+reaper.ReaSock_Send(conn, message)                      -- any JSON-RPC text
+local message = reaper.ReaSock_Poll(conn)               -- "" when nothing is waiting
+reaper.ReaSock_Close(conn)
+```
+
+- `ReaSock_Open` opens and initializes a connection as the given client.
+- `ReaSock_Call` runs one method and returns the JSON-RPC response.
+- `ReaSock_Send` and `ReaSock_Poll` carry everything else: replies,
+  subscribed events, and `action.triggered` for actions the script registered.
+  Poll from a `reaper.defer` loop.
+- A connection that goes 10 seconds without a Call or Poll is closed, along
+  with its actions and subscriptions, so scripts that stop without closing
+  don't leave anything behind.
+
+`examples/lua/follow-selection.lua` prints the selection as it changes.
+It uses `examples/lua/json.lua` (rxi, MIT), since REAPER's Lua has no JSON
+library.
+
 ## Adding to the protocol
 
 The protocol's types and methods live in Rust, and everything else is derived
@@ -204,7 +231,5 @@ them only when it sends something.
   control surface (`csurf_inst`) rather than polling.
 - Ask: more of REAPER's model (FX, envelopes, routing) following the paged,
   GUID-keyed pattern of `items.list` and `items.get`.
-- A ReaScript side (`ReaSock_Send` / `ReaSock_Poll`, in the style of
-  reaspeech-lib) so Lua scripts can join.
 - Launch-on-trigger: remember which client owns which actions and start it if
   it's offline.

@@ -5,6 +5,11 @@
 //   node scripts/smoke-test.mjs
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { connect, findInstance, mirrorSelection, PROTOCOL_VERSION } from "../examples/reasock-client.mjs";
 
 const { port } = findInstance();
@@ -303,6 +308,28 @@ await check("markers.list: regions end after they start, markers have no end", a
   const positions = markers.map((marker) => marker.position);
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
 });
+
+// The ReaScript API, checked from inside REAPER. macOS can hand a script to
+// the running REAPER with `open`; elsewhere, run scripts/lua-smoke.lua by hand.
+if (process.platform === "darwin") {
+  const script = join(dirname(fileURLToPath(import.meta.url)), "lua-smoke.lua");
+  const result = join(homedir(), ".reasock", "lua-smoke.txt");
+  rmSync(result, { force: true });
+  execFileSync("open", ["-a", "REAPER", script]);
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline && !(existsSync(result) && readFileSync(result, "utf8").includes("done"))) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  const lines = existsSync(result) ? readFileSync(result, "utf8").trim().split("\n") : [];
+  for (const line of lines.filter((line) => line !== "done")) {
+    console.log(line.replace(/^(ok  |FAIL) /, "$1 lua: "));
+    if (line.startsWith("FAIL")) failures++;
+  }
+  if (!lines.includes("done")) {
+    failures++;
+    console.log("FAIL lua: scripts/lua-smoke.lua did not finish");
+  }
+}
 
 raw.close();
 client.close();
