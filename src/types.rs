@@ -5,7 +5,12 @@
 //! the published schema.
 
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+/// ASCII letters and digits; used inside REAPER command names.
+pub const NAME_PATTERN: &str = "^[A-Za-z0-9]{1,32}$";
 
 /// Something with a stable key, so a collection of them can be diffed.
 pub trait Keyed {
@@ -183,6 +188,324 @@ pub struct ItemsFound {
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct TracksFound {
     pub tracks: Vec<Option<Track>>,
+}
+
+// ---------------------------------------------------------------------------
+// Events
+
+/// An event a client can subscribe to; also its notification method name.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+pub enum EventName {
+    #[serde(rename = "transport.changed")]
+    TransportChanged,
+    #[serde(rename = "project.changed")]
+    ProjectChanged,
+    #[serde(rename = "project.edited")]
+    ProjectEdited,
+    #[serde(rename = "items.selectionChanged")]
+    ItemsSelectionChanged,
+    #[serde(rename = "tracks.selectionChanged")]
+    TracksSelectionChanged,
+}
+
+impl EventName {
+    pub const ALL: [EventName; 5] = [
+        EventName::TransportChanged,
+        EventName::ProjectChanged,
+        EventName::ProjectEdited,
+        EventName::ItemsSelectionChanged,
+        EventName::TracksSelectionChanged,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventName::TransportChanged => "transport.changed",
+            EventName::ProjectChanged => "project.changed",
+            EventName::ProjectEdited => "project.edited",
+            EventName::ItemsSelectionChanged => "items.selectionChanged",
+            EventName::TracksSelectionChanged => "tracks.selectionChanged",
+        }
+    }
+
+    /// Collection events report changes to a set of entries and take options.
+    pub fn is_collection(self) -> bool {
+        matches!(
+            self,
+            EventName::ItemsSelectionChanged | EventName::TracksSelectionChanged
+        )
+    }
+}
+
+/// Which full entries a collection notification carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Include {
+    /// GUIDs only.
+    None,
+    /// Entries that were added or changed.
+    #[default]
+    Changed,
+    /// The whole collection.
+    All,
+}
+
+/// Options for collection events (`items.selectionChanged`,
+/// `tracks.selectionChanged`). Notifications never carry more than `limit`
+/// GUIDs or entries; anything left out is flagged with `truncated`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CollectionOptions {
+    /// Which full entries to send. Defaults to `changed`.
+    #[serde(default)]
+    pub include: Include,
+    /// The most GUIDs or entries one notification may carry. Defaults to 256.
+    #[schemars(range(min = 1, max = 10000))]
+    pub limit: Option<usize>,
+}
+
+/// An event name, or an event with options.
+#[derive(Clone, Debug, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum Subscription {
+    Event(EventName),
+    WithOptions {
+        event: EventName,
+        options: Option<CollectionOptions>,
+    },
+}
+
+// Written by hand so a bad entry gets a specific error rather than serde's
+// "did not match any variant".
+impl<'de> Deserialize<'de> for Subscription {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WithOptions {
+            event: EventName,
+            options: Option<CollectionOptions>,
+        }
+        match Value::deserialize(deserializer)? {
+            Value::String(name) => serde_json::from_value(Value::String(name))
+                .map(Subscription::Event)
+                .map_err(Error::custom),
+            value @ Value::Object(_) => serde_json::from_value::<WithOptions>(value)
+                .map(|with| Subscription::WithOptions {
+                    event: with.event,
+                    options: with.options,
+                })
+                .map_err(Error::custom),
+            _ => Err(Error::custom("expected an event name or {event, options}")),
+        }
+    }
+}
+
+impl Subscription {
+    pub fn event(&self) -> EventName {
+        match self {
+            Subscription::Event(event) | Subscription::WithOptions { event, .. } => *event,
+        }
+    }
+}
+
+/// Params of `action.triggered`.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct ActionTriggered {
+    /// The id the action was registered with.
+    pub id: String,
+    /// The action's named command, `_REASOCK_<client>_<id>`.
+    pub command: String,
+    pub context: ActionContext,
+}
+
+// ---------------------------------------------------------------------------
+// Method params and results
+
+/// Params of a method that takes none.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NoParams {}
+
+/// A result with nothing to report.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Empty {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InitializeParams {
+    pub protocol_version: String,
+    pub client: ClientInfo,
+    /// Reserved for features the client opts into. Currently ignored.
+    #[allow(dead_code)]
+    pub capabilities: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientInfo {
+    /// Namespaces everything this connection registers.
+    #[schemars(regex(pattern = NAME_PATTERN))]
+    pub name: String,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResult {
+    pub protocol_version: String,
+    pub server: ServerInfo,
+    pub reaper: ReaperInfo,
+    /// This connection's number, unique while REAPER runs.
+    pub connection: u64,
+    pub capabilities: Capabilities,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ReaperInfo {
+    /// For example "7.78/macOS-arm64".
+    pub version: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Capabilities {
+    pub actions: ActionCapabilities,
+    pub events: EventCapabilities,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ActionCapabilities {
+    pub register: bool,
+    pub run: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct EventCapabilities {
+    pub available: Vec<EventName>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterActionParams {
+    /// Unique within this connection.
+    #[schemars(regex(pattern = NAME_PATTERN))]
+    pub id: String,
+    /// Shown in the action list as `ReaSock (<client>): <label>`.
+    #[schemars(length(min = 1))]
+    pub label: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisteredAction {
+    /// Named command, stable across sessions: `_REASOCK_<client>_<id>`.
+    pub command: String,
+    /// Numeric ID for this REAPER session only.
+    pub command_id: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnregisterActionParams {
+    #[schemars(regex(pattern = NAME_PATTERN))]
+    pub id: String,
+}
+
+/// A command ID, such as 40182, or a named command, such as `_SWS_ABOUT`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum CommandRef {
+    Id(#[schemars(range(min = 1))] u32),
+    Name(#[schemars(length(min = 1))] String),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RunActionParams {
+    pub command: CommandRef,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RanAction {
+    pub command_id: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionParams {
+    #[schemars(length(min = 1))]
+    pub events: Vec<Subscription>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Subscriptions {
+    /// All of this connection's subscriptions.
+    pub events: Vec<EventName>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PageParams {
+    /// Defaults to 0.
+    pub offset: Option<usize>,
+    /// Defaults to 256.
+    #[schemars(range(min = 1, max = 10000))]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GuidsParams {
+    /// Compared case-insensitively.
+    #[schemars(length(min = 1, max = 10000))]
+    pub guids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugStatsParams {
+    /// Start a new measurement window after reading.
+    pub reset: Option<bool>,
+}
+
+/// How much of REAPER's main thread Tell is using. Times are in microseconds.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DebugStats {
+    /// Length of the measurement window.
+    pub seconds: f64,
+    /// Per timer tick: snapshots, comparisons, and serializing notifications.
+    pub ticks: Timing,
+    pub events: BTreeMap<EventName, EventTiming>,
+}
+
+#[derive(Debug, Default, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Timing {
+    pub count: u64,
+    pub avg_us: u64,
+    pub max_us: u64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EventTiming {
+    /// The cheap change check, every tick.
+    pub check: Timing,
+    /// Full snapshots, only when the check shows a change.
+    pub snapshot: Timing,
+    pub compare: Timing,
+    /// Notifications queued, counting each recipient.
+    pub sent: u64,
+    /// Size of the most recent notification.
+    pub last_bytes: usize,
 }
 
 #[cfg(test)]

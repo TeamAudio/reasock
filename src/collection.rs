@@ -5,21 +5,13 @@
 //! entries as the subscriber's `limit` allows. Anything left out is flagged
 //! with `truncated`, and the client catches up through Ask.
 
-use crate::types::Keyed;
-use serde_json::Value;
+use crate::types::{CollectionOptions, Include, Keyed};
 use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_LIMIT: usize = 256;
 pub const MAX_LIMIT: usize = 10_000;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Include {
-    None,
-    Changed,
-    All,
-}
-
-/// Per-subscription options for collection events.
+/// Per-subscription options for collection events, validated.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Options {
     pub include: Include,
@@ -35,34 +27,18 @@ impl Default for Options {
     }
 }
 
-impl Options {
-    pub fn parse(value: Option<&Value>) -> Result<Self, String> {
-        let mut options = Self::default();
-        let Some(value) = value else {
-            return Ok(options);
-        };
-        let object = value.as_object().ok_or("options must be an object")?;
-        for (key, value) in object {
-            match key.as_str() {
-                "include" => {
-                    options.include = match value.as_str() {
-                        Some("none") => Include::None,
-                        Some("changed") => Include::Changed,
-                        Some("all") => Include::All,
-                        _ => return Err("include must be \"none\", \"changed\", or \"all\"".into()),
-                    }
-                }
-                "limit" => {
-                    options.limit = value
-                        .as_u64()
-                        .map(|limit| limit as usize)
-                        .filter(|limit| (1..=MAX_LIMIT).contains(limit))
-                        .ok_or_else(|| format!("limit must be between 1 and {MAX_LIMIT}"))?;
-                }
-                other => return Err(format!("unknown option: {other}")),
-            }
+impl TryFrom<&CollectionOptions> for Options {
+    type Error = String;
+
+    fn try_from(options: &CollectionOptions) -> Result<Self, String> {
+        let limit = options.limit.unwrap_or(DEFAULT_LIMIT);
+        if !(1..=MAX_LIMIT).contains(&limit) {
+            return Err(format!("limit must be between 1 and {MAX_LIMIT}"));
         }
-        Ok(options)
+        Ok(Self {
+            include: options.include,
+            limit,
+        })
     }
 }
 
@@ -220,15 +196,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_options() {
-        assert_eq!(Options::parse(None), Ok(Options::default()));
-        let parsed = Options::parse(Some(&json!({ "include": "all", "limit": 10 })));
-        assert_eq!(parsed, Ok(options(Include::All, 10)));
-        assert!(Options::parse(Some(&json!({ "include": "some" }))).is_err());
-        assert!(Options::parse(Some(&json!({ "limit": 0 }))).is_err());
-        assert!(Options::parse(Some(&json!({ "limit": 1_000_000 }))).is_err());
-        assert!(Options::parse(Some(&json!({ "colour": "red" }))).is_err());
-        assert!(Options::parse(Some(&json!("all"))).is_err());
+    fn validates_options() {
+        let parse = |value| {
+            serde_json::from_value::<CollectionOptions>(value)
+                .map_err(|error| error.to_string())
+                .and_then(|options| Options::try_from(&options))
+        };
+        assert_eq!(parse(json!({})), Ok(Options::default()));
+        assert_eq!(parse(json!({ "include": "all", "limit": 10 })), Ok(options(Include::All, 10)));
+        assert!(parse(json!({ "include": "some" })).is_err());
+        assert!(parse(json!({ "limit": 0 })).is_err());
+        assert!(parse(json!({ "limit": 1_000_000 })).is_err());
+        assert!(parse(json!({ "colour": "red" })).is_err());
+        assert!(parse(json!("all")).is_err());
     }
 
     #[test]

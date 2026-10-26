@@ -6,24 +6,53 @@ use serde_json::{json, Map, Value};
 
 pub const PROTOCOL_VERSION: &str = "0.2.0";
 
-/// Every method a client may call; kept in sync with openrpc.json by a test.
-pub const METHODS: &[&str] = &[
-    "initialize",
-    "rpc.discover",
-    "action.register",
-    "action.unregister",
-    "action.run",
-    "events.subscribe",
-    "events.unsubscribe",
-    "items.listSelected",
-    "items.get",
-    "tracks.listSelected",
-    "tracks.get",
-    "debug.stats",
-];
+/// An application error: a code outside JSON-RPC's reserved range, with a
+/// name for the OpenRPC document.
+pub struct AppError {
+    pub name: &'static str,
+    pub code: i64,
+    pub message: &'static str,
+}
 
-/// The OpenRPC description of the protocol, served by `rpc.discover`.
-pub const OPENRPC: &str = include_str!("../openrpc.json");
+pub const NOT_INITIALIZED: AppError = AppError {
+    name: "NotInitialized",
+    code: -32001,
+    message: "call initialize first",
+};
+pub const ALREADY_INITIALIZED: AppError = AppError {
+    name: "AlreadyInitialized",
+    code: -32002,
+    message: "already initialized",
+};
+pub const ACTION_CONFLICT: AppError = AppError {
+    name: "ActionConflict",
+    code: -32010,
+    message: "the action is owned by another connection",
+};
+pub const UNKNOWN_ACTION: AppError = AppError {
+    name: "UnknownAction",
+    code: -32011,
+    message: "this connection has no action with that id",
+};
+pub const UNKNOWN_COMMAND: AppError = AppError {
+    name: "UnknownCommand",
+    code: -32012,
+    message: "REAPER has no such command",
+};
+pub const REGISTRATION_FAILED: AppError = AppError {
+    name: "RegistrationFailed",
+    code: -32013,
+    message: "REAPER refused the registration",
+};
+
+pub const APP_ERRORS: &[&AppError] = &[
+    &NOT_INITIALIZED,
+    &ALREADY_INITIALIZED,
+    &ACTION_CONFLICT,
+    &UNKNOWN_ACTION,
+    &UNKNOWN_COMMAND,
+    &REGISTRATION_FAILED,
+];
 
 #[derive(Debug, PartialEq)]
 pub struct RpcError {
@@ -55,24 +84,15 @@ impl RpcError {
         Self::new(-32603, message)
     }
 
-    // Application errors, documented in openrpc.json.
+    /// An application error with a more specific message.
+    pub fn app(error: &AppError, message: impl Into<String>) -> Self {
+        Self::new(error.code, message)
+    }
     pub fn not_initialized() -> Self {
-        Self::new(-32001, "call initialize first")
+        Self::app(&NOT_INITIALIZED, NOT_INITIALIZED.message)
     }
     pub fn already_initialized() -> Self {
-        Self::new(-32002, "already initialized")
-    }
-    pub fn action_conflict(message: impl Into<String>) -> Self {
-        Self::new(-32010, message)
-    }
-    pub fn unknown_action(message: impl Into<String>) -> Self {
-        Self::new(-32011, message)
-    }
-    pub fn unknown_command(message: impl Into<String>) -> Self {
-        Self::new(-32012, message)
-    }
-    pub fn registration_failed(message: impl Into<String>) -> Self {
-        Self::new(-32013, message)
+        Self::app(&ALREADY_INITIALIZED, ALREADY_INITIALIZED.message)
     }
 }
 
@@ -80,15 +100,8 @@ impl RpcError {
 pub struct Params(Map<String, Value>);
 
 impl Params {
-    pub fn str(&self, key: &str) -> Result<&str, RpcError> {
-        self.0
-            .get(key)
-            .and_then(Value::as_str)
-            .ok_or_else(|| RpcError::invalid_params(format!("{key} must be a string")))
-    }
-
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        self.0.get(key)
+    pub fn into_value(self) -> Value {
+        Value::Object(self.0)
     }
 }
 
@@ -187,7 +200,7 @@ mod tests {
     fn echo(method: &str, params: Params) -> Result<Value, RpcError> {
         match method {
             "echo" => Ok(Value::Object(params.0)),
-            "fail" => Err(RpcError::unknown_command("nope")),
+            "fail" => Err(RpcError::app(&UNKNOWN_COMMAND, "nope")),
             other => Err(RpcError::method_not_found(other)),
         }
     }
@@ -258,21 +271,5 @@ mod tests {
     fn batch_of_notifications_gets_no_reply() {
         let text = r#"[{"jsonrpc":"2.0","method":"echo"},{"jsonrpc":"2.0","method":"echo"}]"#;
         assert_eq!(handle_text(text, echo), None);
-    }
-
-    #[test]
-    fn openrpc_document_matches_implementation() {
-        let document: Value = serde_json::from_str(OPENRPC).unwrap();
-        assert_eq!(document["info"]["version"], PROTOCOL_VERSION);
-        let mut documented: Vec<&str> = document["methods"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|method| method["name"].as_str().unwrap())
-            .collect();
-        let mut implemented = METHODS.to_vec();
-        documented.sort();
-        implemented.sort();
-        assert_eq!(documented, implemented);
     }
 }

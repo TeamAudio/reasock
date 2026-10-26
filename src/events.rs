@@ -13,34 +13,18 @@
 use crate::collection::{Collection, Delta, Options};
 use crate::model;
 use crate::protocol;
-use crate::types::{Item, ItemsChange, Project, ProjectEdit, Track, TracksChange, Transport};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use crate::types::{
+    DebugStats, EventName, EventTiming, Item, ItemsChange, Project, ProjectEdit, Timing, Track,
+    TracksChange, Transport,
+};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
-/// Every event a client can subscribe to; also the notification method names.
-pub const EVENTS: &[&str] = &[
-    "transport.changed",
-    "project.changed",
-    "project.edited",
-    "items.selectionChanged",
-    "tracks.selectionChanged",
-];
-
-pub fn lookup(name: &str) -> Option<&'static str> {
-    EVENTS.iter().copied().find(|event| *event == name)
-}
-
-/// Whether the event is about a collection, and so accepts `Options`.
-pub fn is_collection(event: &str) -> bool {
-    matches!(event, "items.selectionChanged" | "tracks.selectionChanged")
-}
-
 /// Fills `out` with a cheap fingerprint of the event's state, if it has one.
-fn fingerprint(event: &str, out: &mut Vec<u64>) -> bool {
+fn fingerprint(event: EventName, out: &mut Vec<u64>) -> bool {
     match event {
-        "items.selectionChanged" => model::selected_items_fingerprint(out),
-        "tracks.selectionChanged" => model::selected_tracks_fingerprint(out),
+        EventName::ItemsSelectionChanged => model::selected_items_fingerprint(out),
+        EventName::TracksSelectionChanged => model::selected_tracks_fingerprint(out),
         _ => return false,
     }
     true
@@ -56,14 +40,17 @@ enum State {
 }
 
 impl State {
-    fn snapshot(event: &str) -> State {
+    fn snapshot(event: EventName) -> State {
         match event {
-            "transport.changed" => State::Transport(model::transport()),
-            "project.changed" => State::Project(model::project()),
-            "project.edited" => State::ProjectEdit(model::project_edit()),
-            "items.selectionChanged" => State::Items(Collection::new(model::selected_items())),
-            "tracks.selectionChanged" => State::Tracks(Collection::new(model::selected_tracks())),
-            other => unreachable!("unknown event {other}"),
+            EventName::TransportChanged => State::Transport(model::transport()),
+            EventName::ProjectChanged => State::Project(model::project()),
+            EventName::ProjectEdited => State::ProjectEdit(model::project_edit()),
+            EventName::ItemsSelectionChanged => {
+                State::Items(Collection::new(model::selected_items()))
+            }
+            EventName::TracksSelectionChanged => {
+                State::Tracks(Collection::new(model::selected_tracks()))
+            }
         }
     }
 
@@ -81,18 +68,19 @@ impl State {
     }
 
     /// The notification for one subscriber, serialized.
-    fn message(&self, event: &str, delta: Option<&Delta>, options: Options) -> String {
+    fn message(&self, event: EventName, delta: Option<&Delta>, options: Options) -> String {
+        let method = event.as_str();
         match self {
-            State::Transport(params) => protocol::notification(event, params),
-            State::Project(params) => protocol::notification(event, params),
-            State::ProjectEdit(params) => protocol::notification(event, params),
+            State::Transport(params) => protocol::notification(method, params),
+            State::Project(params) => protocol::notification(method, params),
+            State::ProjectEdit(params) => protocol::notification(method, params),
             State::Items(items) => {
                 let params: ItemsChange = items.render(delta, options).into();
-                protocol::notification(event, &params)
+                protocol::notification(method, &params)
             }
             State::Tracks(tracks) => {
                 let params: TracksChange = tracks.render(delta, options).into();
-                protocol::notification(event, &params)
+                protocol::notification(method, &params)
             }
         }
     }
@@ -101,7 +89,7 @@ impl State {
 /// The last state of each event type that currently has subscribers.
 #[derive(Default)]
 pub struct Tracker {
-    last: HashMap<&'static str, Watched>,
+    last: HashMap<EventName, Watched>,
     scratch: Vec<u64>,
     pub stats: Stats,
 }
@@ -113,89 +101,11 @@ struct Watched {
     delta: Option<Delta>,
 }
 
-/// Timing for `debug.stats`: how much main-thread time Tell costs.
-#[derive(Default)]
-pub struct Stats {
-    since: Option<Instant>,
-    ticks: Timing,
-    events: HashMap<&'static str, EventStats>,
-}
-
-#[derive(Default)]
-struct Timing {
-    count: u64,
-    total: Duration,
-    max: Duration,
-}
-
-impl Timing {
-    fn record(&mut self, elapsed: Duration) {
-        self.count += 1;
-        self.total += elapsed;
-        self.max = self.max.max(elapsed);
-    }
-
-    fn to_json(&self) -> Value {
-        let average = self.total.checked_div(self.count as u32).unwrap_or_default();
-        json!({
-            "count": self.count,
-            "avgUs": average.as_micros() as u64,
-            "maxUs": self.max.as_micros() as u64,
-        })
-    }
-}
-
-#[derive(Default)]
-struct EventStats {
-    check: Timing,
-    snapshot: Timing,
-    compare: Timing,
-    sent: u64,
-    last_bytes: usize,
-}
-
-impl Stats {
-    /// Time spent on events in one timer tick, including serializing and
-    /// queueing notifications.
-    pub fn record_tick(&mut self, elapsed: Duration) {
-        self.since.get_or_insert_with(Instant::now);
-        self.ticks.record(elapsed);
-    }
-
-    pub fn record_send(&mut self, event: &'static str, bytes: usize) {
-        let stats = self.events.entry(event).or_default();
-        stats.sent += 1;
-        stats.last_bytes = bytes;
-    }
-
-    pub fn to_json(&self) -> Value {
-        let events: serde_json::Map<String, Value> = self
-            .events
-            .iter()
-            .map(|(event, stats)| {
-                let value = json!({
-                    "check": stats.check.to_json(),
-                    "snapshot": stats.snapshot.to_json(),
-                    "compare": stats.compare.to_json(),
-                    "sent": stats.sent,
-                    "lastBytes": stats.last_bytes,
-                });
-                (event.to_string(), value)
-            })
-            .collect();
-        json!({
-            "seconds": self.since.map(|since| since.elapsed().as_secs_f64()).unwrap_or(0.0),
-            "ticks": self.ticks.to_json(),
-            "events": events,
-        })
-    }
-}
-
 impl Tracker {
     /// Checks the given events and returns those that changed since the last
     /// poll. Forgets events that are no longer wanted, so a later subscriber
     /// starts fresh.
-    pub fn poll(&mut self, wanted: &[&'static str]) -> Vec<&'static str> {
+    pub fn poll(&mut self, wanted: &[EventName]) -> Vec<EventName> {
         self.last.retain(|event, _| wanted.contains(event));
         let mut changed = Vec::new();
         for &event in wanted {
@@ -204,7 +114,7 @@ impl Tracker {
             let checked = Instant::now();
             let stats = self.stats.events.entry(event).or_default();
             stats.check.record(checked - started);
-            let previous = self.last.get(event);
+            let previous = self.last.get(&event);
             if let Some(watched) = previous {
                 if has_fingerprint && watched.fingerprint.as_ref() == Some(&self.scratch) {
                     continue;
@@ -218,7 +128,7 @@ impl Tracker {
             stats.compare.record(snapshotted.elapsed());
             let fingerprint = has_fingerprint.then(|| self.scratch.clone());
             // Keep the last real delta when only the fingerprint moved.
-            let delta = match (is_new, self.last.remove(event)) {
+            let delta = match (is_new, self.last.remove(&event)) {
                 (false, Some(watched)) => watched.delta,
                 _ => delta,
             };
@@ -232,30 +142,87 @@ impl Tracker {
 
     /// The serialized notification for a polled event. `initial` is a
     /// subscriber's first notification; `options` apply to collection events.
-    pub fn message(&self, event: &str, initial: bool, options: Options) -> Option<String> {
-        let watched = self.last.get(event)?;
+    pub fn message(&self, event: EventName, initial: bool, options: Options) -> Option<String> {
+        let watched = self.last.get(&event)?;
         let delta = if initial { None } else { watched.delta.as_ref() };
         Some(watched.state.message(event, delta, options))
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Timing for `debug.stats`: how much main-thread time Tell costs.
+#[derive(Default)]
+pub struct Stats {
+    since: Option<Instant>,
+    ticks: Accumulator,
+    events: HashMap<EventName, EventStats>,
+}
 
-    #[test]
-    fn every_event_is_documented() {
-        let document: Value = serde_json::from_str(crate::protocol::OPENRPC).unwrap();
-        let documented: Vec<&str> = document["x-notifications"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|notification| notification["name"].as_str().unwrap())
-            .collect();
-        for event in EVENTS {
-            assert!(documented.contains(event), "{event} missing from x-notifications");
+#[derive(Default)]
+struct Accumulator {
+    count: u64,
+    total: Duration,
+    max: Duration,
+}
+
+impl Accumulator {
+    fn record(&mut self, elapsed: Duration) {
+        self.count += 1;
+        self.total += elapsed;
+        self.max = self.max.max(elapsed);
+    }
+
+    fn timing(&self) -> Timing {
+        let average = self.total.checked_div(self.count as u32).unwrap_or_default();
+        Timing {
+            count: self.count,
+            avg_us: average.as_micros() as u64,
+            max_us: self.max.as_micros() as u64,
         }
-        let names = document["components"]["schemas"]["EventName"]["enum"].clone();
-        assert_eq!(names, json!(EVENTS));
+    }
+}
+
+#[derive(Default)]
+struct EventStats {
+    check: Accumulator,
+    snapshot: Accumulator,
+    compare: Accumulator,
+    sent: u64,
+    last_bytes: usize,
+}
+
+impl Stats {
+    /// Time spent on events in one timer tick, including serializing and
+    /// queueing notifications.
+    pub fn record_tick(&mut self, elapsed: Duration) {
+        self.since.get_or_insert_with(Instant::now);
+        self.ticks.record(elapsed);
+    }
+
+    pub fn record_send(&mut self, event: EventName, bytes: usize) {
+        let stats = self.events.entry(event).or_default();
+        stats.sent += 1;
+        stats.last_bytes = bytes;
+    }
+
+    pub fn report(&self) -> DebugStats {
+        let events: BTreeMap<EventName, EventTiming> = self
+            .events
+            .iter()
+            .map(|(&event, stats)| {
+                let timing = EventTiming {
+                    check: stats.check.timing(),
+                    snapshot: stats.snapshot.timing(),
+                    compare: stats.compare.timing(),
+                    sent: stats.sent,
+                    last_bytes: stats.last_bytes,
+                };
+                (event, timing)
+            })
+            .collect();
+        DebugStats {
+            seconds: self.since.map(|since| since.elapsed().as_secs_f64()).unwrap_or(0.0),
+            ticks: self.ticks.timing(),
+            events,
+        }
     }
 }

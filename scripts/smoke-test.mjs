@@ -187,6 +187,18 @@ await check("events.unsubscribe stops notifications", async () => {
   assert.equal(fired, false);
 });
 
+await check("params outside their documented constraints are -32602", async () => {
+  await assert.rejects(client.call("action.run", { command: 0 }), { code: -32602 });
+  await assert.rejects(client.call("action.run", { command: "" }), { code: -32602 });
+  await assert.rejects(client.call("action.unregister", { id: "has space" }), { code: -32602 });
+  await assert.rejects(client.call("action.register", { id: "ok", label: "" }), { code: -32602 });
+});
+
+await check("events must not be empty (-32602)", async () => {
+  await assert.rejects(client.call("events.subscribe", { events: [] }), { code: -32602 });
+  await assert.rejects(client.call("events.unsubscribe", { events: [] }), { code: -32602 });
+});
+
 await check("options are only for collection events (-32602)", async () => {
   await assert.rejects(
     client.call("events.subscribe", { events: [{ event: "transport.changed", options: { limit: 5 } }] }),

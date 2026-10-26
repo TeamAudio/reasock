@@ -34,8 +34,8 @@ to 9679 (`REASOCK_PORT` overrides this). It writes
 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over WebSocket text
 frames, with params by name. Batches and notifications are supported. The
 methods are described in [`openrpc.json`](openrpc.json)
-([OpenRPC](https://open-rpc.org/) 1.4), which the server also returns from
-`rpc.discover`.
+([OpenRPC](https://open-rpc.org/) 1.4). The document is generated from the
+code and served by `rpc.discover`, so it always matches the running server.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -108,6 +108,26 @@ Actions are named `_REASOCK_<client>_<id>` and are removed when their
 connection closes. Errors use the standard JSON-RPC codes, plus the
 application codes listed in `openrpc.json` (-32001 not initialized, -32010
 action conflict, -32012 unknown command, and so on).
+
+## Adding to the protocol
+
+The protocol's types and methods live in Rust, and everything else is derived
+from them:
+
+1. Add the params and result structs to `src/types.rs`. Their doc comments
+   become descriptions, and `#[schemars(...)]` attributes document constraints
+   (patterns, ranges, lengths). Enforce those constraints in the handler too:
+   they are documented, not checked automatically.
+2. Add a `Method` impl in `src/api.rs` with its name, summary, errors, and
+   `call`, and list it in `methods()`. Notifications work the same way with
+   `Notification` and `notifications()`.
+3. Run `REASOCK_UPDATE_OPENRPC=1 cargo test` to regenerate `openrpc.json`, then
+   review the diff. `cargo test` fails while the published document is out of
+   date.
+
+Dispatch, the `initialize` gate, and `-32602` errors for malformed params come
+from the registry. Internally, ReaSock works with these structs and serializes
+them only when it sends something.
 
 ## Spike findings (REAPER 7.78, macOS arm64)
 

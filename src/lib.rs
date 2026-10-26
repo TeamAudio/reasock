@@ -1,3 +1,4 @@
+mod api;
 mod bridge;
 mod collection;
 mod discovery;
