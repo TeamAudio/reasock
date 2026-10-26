@@ -5,7 +5,7 @@
 //   node scripts/smoke-test.mjs
 
 import assert from "node:assert/strict";
-import { connect, findInstance, PROTOCOL_VERSION } from "../examples/reasock-client.mjs";
+import { connect, findInstance, mirrorSelection, PROTOCOL_VERSION } from "../examples/reasock-client.mjs";
 
 const { port } = findInstance();
 let failures = 0;
@@ -159,7 +159,10 @@ await check("subscribing sends the current state once", async () => {
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.deepEqual([...received.keys()].sort(), [...events].sort());
   assert.equal(typeof received.get("transport.changed").playing, "boolean");
-  assert.ok(Array.isArray(received.get("items.selectionChanged").selectedItems));
+  const items = received.get("items.selectionChanged");
+  assert.equal(typeof items.count, "number");
+  assert.equal(items.added.length, items.count);
+  assert.equal(items.truncated, false);
 });
 
 await check("transport.changed follows play and stop", async () => {
@@ -182,6 +185,51 @@ await check("events.unsubscribe stops notifications", async () => {
   await client.call("action.run", { command: 1016 });
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(fired, false);
+});
+
+await check("options are only for collection events (-32602)", async () => {
+  await assert.rejects(
+    client.call("events.subscribe", { events: [{ event: "transport.changed", options: { limit: 5 } }] }),
+    { code: -32602 },
+  );
+  await assert.rejects(
+    client.call("events.subscribe", { events: [{ event: "items.selectionChanged", options: { include: "some" } }] }),
+    { code: -32602 },
+  );
+});
+
+await check("items.listSelected and tracks.listSelected page the selection", async () => {
+  const items = await client.call("items.listSelected", { limit: 5 });
+  assert.equal(items.offset, 0);
+  assert.ok(items.items.length <= Math.min(5, items.count));
+  const tracks = await client.call("tracks.listSelected", {});
+  assert.equal(tracks.tracks.length, Math.min(256, tracks.count));
+  await assert.rejects(client.call("items.listSelected", { limit: 0 }), { code: -32602 });
+});
+
+await check("items.get and tracks.get return null for unknown GUIDs", async () => {
+  const unknown = "{00000000-0000-0000-0000-000000000000}";
+  assert.deepEqual(await client.call("items.get", { guids: [unknown] }), { items: [null] });
+  assert.deepEqual(await client.call("tracks.get", { guids: [unknown] }), { tracks: [null] });
+  await assert.rejects(client.call("items.get", { guids: [] }), { code: -32602 });
+});
+
+await check("items.get finds selected items by GUID", async () => {
+  const { items } = await client.call("items.listSelected", { limit: 3 });
+  const guids = items.map((item) => item.guid.toLowerCase());
+  if (guids.length === 0) return; // nothing selected in this project
+  const found = await client.call("items.get", { guids });
+  assert.deepEqual(found.items, items);
+});
+
+await check("mirrorSelection matches items.listSelected", async () => {
+  const mirrorClient = await connect({ name: "mirror", port });
+  const mirror = await mirrorSelection(mirrorClient, "items");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const listed = await mirrorClient.call("items.listSelected", { limit: 10000 });
+  assert.equal(mirror.count, listed.count);
+  assert.deepEqual([...mirror.entries.keys()].sort(), listed.items.map((item) => item.guid).sort());
+  mirrorClient.close();
 });
 
 raw.close();

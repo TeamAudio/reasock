@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-pub const PROTOCOL_VERSION: &str = "0.1.0";
+pub const PROTOCOL_VERSION: &str = "0.2.0";
 
 /// Every method a client may call; kept in sync with openrpc.json by a test.
 pub const METHODS: &[&str] = &[
@@ -15,6 +15,10 @@ pub const METHODS: &[&str] = &[
     "action.run",
     "events.subscribe",
     "events.unsubscribe",
+    "items.listSelected",
+    "items.get",
+    "tracks.listSelected",
+    "tracks.get",
     "debug.stats",
 ];
 

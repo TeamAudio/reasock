@@ -2,7 +2,7 @@
   "openrpc": "1.4.1",
   "info": {
     "title": "ReaSock",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`.",
     "license": {
       "name": "MIT"
@@ -67,7 +67,7 @@
           "params": [
             {
               "name": "protocolVersion",
-              "value": "0.1.0"
+              "value": "0.2.0"
             },
             {
               "name": "client",
@@ -80,7 +80,7 @@
           "result": {
             "name": "session",
             "value": {
-              "protocolVersion": "0.1.0",
+              "protocolVersion": "0.2.0",
               "server": {
                 "name": "reasock",
                 "version": "0.1.0"
@@ -261,7 +261,7 @@
     {
       "name": "events.subscribe",
       "summary": "Start receiving state-change notifications",
-      "description": "Adds events to this connection's subscriptions. Right after subscribing, the connection receives each newly subscribed event once with the current state; after that, only when the state changes. State is checked about 30 times per second, and bursts of changes arrive as one notification per check.",
+      "description": "Adds events to this connection's subscriptions, replacing the options of any it already has. Right after subscribing (or changing options), the connection receives the event once with the current state; after that, only when the state changes. State is checked about 30 times per second, and bursts of changes arrive as one notification per check. Collection events accept options; see `CollectionOptions`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -270,7 +270,7 @@
           "schema": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/EventName"
+              "$ref": "#/components/schemas/Subscription"
             },
             "minItems": 1
           }
@@ -306,6 +306,31 @@
               ]
             }
           }
+        },
+        {
+          "name": "selection GUIDs only",
+          "params": [
+            {
+              "name": "events",
+              "value": [
+                {
+                  "event": "items.selectionChanged",
+                  "options": {
+                    "include": "none",
+                    "limit": 1000
+                  }
+                }
+              ]
+            }
+          ],
+          "result": {
+            "name": "subscriptions",
+            "value": {
+              "events": [
+                "items.selectionChanged"
+              ]
+            }
+          }
         }
       ]
     },
@@ -320,7 +345,7 @@
           "schema": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/EventName"
+              "$ref": "#/components/schemas/Subscription"
             },
             "minItems": 1
           }
@@ -330,6 +355,214 @@
         "name": "subscriptions",
         "schema": {
           "$ref": "#/components/schemas/Subscriptions"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "items.listSelected",
+      "summary": "Get the selected items, a page at a time",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "offset",
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        },
+        {
+          "name": "limit",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 256
+          }
+        }
+      ],
+      "result": {
+        "name": "page",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "description": "Total selected items"
+            },
+            "offset": {
+              "type": "integer"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Item"
+              }
+            }
+          },
+          "required": [
+            "count",
+            "offset",
+            "items"
+          ]
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "items.get",
+      "summary": "Look up items by GUID",
+      "description": "Searches the current project. Each result is in the same position as its GUID, or null if there is no such item. GUIDs compare case-insensitively.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "guids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 10000
+          }
+        }
+      ],
+      "result": {
+        "name": "found",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Item"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "items"
+          ]
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "tracks.listSelected",
+      "summary": "Get the selected tracks, a page at a time",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "offset",
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        },
+        {
+          "name": "limit",
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 256
+          }
+        }
+      ],
+      "result": {
+        "name": "page",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer",
+              "description": "Total selected tracks"
+            },
+            "offset": {
+              "type": "integer"
+            },
+            "tracks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Track"
+              }
+            }
+          },
+          "required": [
+            "count",
+            "offset",
+            "tracks"
+          ]
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "tracks.get",
+      "summary": "Look up tracks by GUID",
+      "description": "Searches the current project. Each result is in the same position as its GUID, or null if there is no such track. GUIDs compare case-insensitively.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "guids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "maxItems": 10000
+          }
+        }
+      ],
+      "result": {
+        "name": "found",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "tracks": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Track"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "tracks"
+          ]
         }
       },
       "errors": [
@@ -537,37 +770,129 @@
     },
     {
       "name": "items.selectionChanged",
-      "summary": "The set of selected items changed, or a selected item changed",
-      "description": "Carries every selected item, so it also fires when a selected item is moved, trimmed, or renamed. Subscribe with `events.subscribe`.",
+      "summary": "The item selection changed, or a selected item changed",
+      "description": "Fires when items are selected or deselected, and when a selected item is moved, trimmed, or renamed (including live, while dragging). The first notification after subscribing lists every selected item as added. Subscribe with `events.subscribe`.",
       "paramStructure": "by-name",
       "params": [
         {
-          "name": "selectedItems",
+          "name": "count",
           "required": true,
+          "schema": {
+            "type": "integer"
+          },
+          "description": "How many items are selected"
+        },
+        {
+          "name": "added",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs newly selected. Omitted, like `removed` and `changed`, when the change is larger than `limit`."
+        },
+        {
+          "name": "removed",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs no longer selected"
+        },
+        {
+          "name": "changed",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs still selected whose details changed"
+        },
+        {
+          "name": "items",
           "schema": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Item"
             }
-          }
+          },
+          "description": "Full entries, per the `include` option, in selection order"
+        },
+        {
+          "name": "truncated",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Something this subscription asks for was left out because it exceeded `limit`. Call `items.listSelected` to catch up."
         }
       ]
     },
     {
       "name": "tracks.selectionChanged",
-      "summary": "The set of selected tracks changed, or a selected track was renamed or moved",
-      "description": "The master track is never included. Subscribe with `events.subscribe`.",
+      "summary": "The track selection changed, or a selected track changed",
+      "description": "Works like `items.selectionChanged`. The master track is never included. Subscribe with `events.subscribe`.",
       "paramStructure": "by-name",
       "params": [
         {
-          "name": "selectedTracks",
+          "name": "count",
           "required": true,
+          "schema": {
+            "type": "integer"
+          },
+          "description": "How many tracks are selected"
+        },
+        {
+          "name": "added",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs newly selected. Omitted, like `removed` and `changed`, when the change is larger than `limit`."
+        },
+        {
+          "name": "removed",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs no longer selected"
+        },
+        {
+          "name": "changed",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "GUIDs still selected whose details changed"
+        },
+        {
+          "name": "tracks",
           "schema": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Track"
             }
-          }
+          },
+          "description": "Full entries, per the `include` option, in selection order"
+        },
+        {
+          "name": "truncated",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Something this subscription asks for was left out because it exceeded `limit`. Call `tracks.listSelected` to catch up."
         }
       ]
     }
@@ -688,11 +1013,21 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Item"
-            }
+            },
+            "description": "Up to the first 256 selected items"
+          },
+          "selectedItemCount": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More items are selected than `selectedItems` holds; use `items.listSelected` for the rest."
           }
         },
         "required": [
-          "selectedItems"
+          "selectedItems",
+          "selectedItemCount",
+          "truncated"
         ]
       },
       "EventName": {
@@ -815,6 +1150,51 @@
           "count",
           "avgUs",
           "maxUs"
+        ]
+      },
+      "CollectionOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Options for collection events (`items.selectionChanged`, `tracks.selectionChanged`). Notifications never carry more than `limit` GUIDs or entries; anything left out is flagged with `truncated`.",
+        "properties": {
+          "include": {
+            "type": "string",
+            "enum": [
+              "none",
+              "changed",
+              "all"
+            ],
+            "default": "changed",
+            "description": "Which full entries to send: none (GUIDs only), the added and changed ones, or the whole selection."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 256
+          }
+        }
+      },
+      "Subscription": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EventName"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "event": {
+                "$ref": "#/components/schemas/EventName"
+              },
+              "options": {
+                "$ref": "#/components/schemas/CollectionOptions"
+              }
+            },
+            "required": [
+              "event"
+            ]
+          }
         ]
       }
     },

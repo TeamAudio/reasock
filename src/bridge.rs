@@ -4,6 +4,7 @@
 //! command hooks. Running an action re-enters the command hook synchronously,
 //! so no lock may be held across `main_on_command_ex`.
 
+use crate::collection::{self, Options};
 use crate::events::{self, Tracker};
 use crate::log::log;
 use crate::model;
@@ -14,7 +15,7 @@ use reaper_medium::{
     ReaperSession, SectionContext, WindowContext,
 };
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Mutex, MutexGuard};
@@ -23,7 +24,7 @@ struct Connection {
     /// Set by `initialize`; used to namespace this connection's actions.
     client: Option<String>,
     outbox: Sender<String>,
-    subscriptions: BTreeSet<&'static str>,
+    subscriptions: BTreeMap<&'static str, Options>,
     /// Subscribed since the last tick; owed the current snapshot.
     pending_initial: BTreeSet<&'static str>,
 }
@@ -116,7 +117,7 @@ fn handle_inbound(message: Inbound) {
             let connection = Connection {
                 client: None,
                 outbox,
-                subscriptions: BTreeSet::new(),
+                subscriptions: BTreeMap::new(),
                 pending_initial: BTreeSet::new(),
             };
             state.connections.insert(conn, connection);
@@ -173,6 +174,18 @@ fn call(conn: ConnId, method: &str, params: Params) -> Result<Value, RpcError> {
         "action.register" => register_action(conn, &client, &params),
         "action.unregister" => unregister_action(conn, &params),
         "action.run" => run_action(&params),
+        "items.listSelected" => {
+            let (offset, limit) = page(&params)?;
+            let (count, items) = model::selected_items_page(offset, limit);
+            Ok(json!({ "count": count, "offset": offset, "items": items }))
+        }
+        "items.get" => Ok(json!({ "items": model::items_by_guid(&guids(&params)?) })),
+        "tracks.listSelected" => {
+            let (offset, limit) = page(&params)?;
+            let (count, tracks) = model::selected_tracks_page(offset, limit);
+            Ok(json!({ "count": count, "offset": offset, "tracks": tracks }))
+        }
+        "tracks.get" => Ok(json!({ "tracks": model::tracks_by_guid(&guids(&params)?) })),
         "events.subscribe" => subscribe(conn, &params),
         "events.unsubscribe" => unsubscribe(conn, &params),
         "debug.stats" => debug_stats(&params),
@@ -396,59 +409,126 @@ fn dispatch(command: CommandId) -> bool {
         json!({
             "id": id,
             "command": format!("_{command_name}"),
-            "context": { "selectedItems": model::selected_items() },
+            "context": action_context(),
         }),
     );
     let _ = outbox.send(message);
     true
 }
 
-fn event_names(params: &Params) -> Result<Vec<&'static str>, RpcError> {
-    let names = params
+/// Selected items when an action runs, capped like collection notifications.
+fn action_context() -> Value {
+    let (count, items) = model::selected_items_page(0, collection::DEFAULT_LIMIT);
+    let truncated = count > items.len();
+    json!({ "selectedItems": items, "selectedItemCount": count, "truncated": truncated })
+}
+
+/// `offset` and `limit` for paged Ask methods.
+fn page(params: &Params) -> Result<(usize, usize), RpcError> {
+    let offset = match params.get("offset") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| RpcError::invalid_params("offset must be a non-negative integer"))?
+            as usize,
+    };
+    let limit = match params.get("limit") {
+        None => collection::DEFAULT_LIMIT,
+        Some(value) => value
+            .as_u64()
+            .map(|limit| limit as usize)
+            .filter(|limit| (1..=collection::MAX_LIMIT).contains(limit))
+            .ok_or_else(|| {
+                RpcError::invalid_params(format!(
+                    "limit must be between 1 and {}",
+                    collection::MAX_LIMIT
+                ))
+            })?,
+    };
+    Ok((offset, limit))
+}
+
+fn guids(params: &Params) -> Result<Vec<String>, RpcError> {
+    let invalid = || {
+        RpcError::invalid_params(format!(
+            "guids must be an array of 1 to {} strings",
+            collection::MAX_LIMIT
+        ))
+    };
+    let guids = params.get("guids").and_then(Value::as_array).ok_or_else(invalid)?;
+    if guids.is_empty() || guids.len() > collection::MAX_LIMIT {
+        return Err(invalid());
+    }
+    guids
+        .iter()
+        .map(|guid| guid.as_str().map(str::to_owned).ok_or_else(invalid))
+        .collect()
+}
+
+/// Parses `events`: names, or `{event, options}` objects.
+fn subscriptions(params: &Params) -> Result<Vec<(&'static str, Options)>, RpcError> {
+    let entries = params
         .get("events")
         .and_then(Value::as_array)
-        .ok_or_else(|| RpcError::invalid_params("events must be an array of event names"))?;
-    names
+        .filter(|entries| !entries.is_empty())
+        .ok_or_else(|| RpcError::invalid_params("events must be a non-empty array"))?;
+    let unknown = |name: &Value| {
+        RpcError::invalid_params(format!(
+            "unknown event {name}; available: {}",
+            events::EVENTS.join(", ")
+        ))
+    };
+    entries
         .iter()
-        .map(|name| {
-            name.as_str().and_then(events::lookup).ok_or_else(|| {
-                RpcError::invalid_params(format!(
-                    "unknown event {name}; available: {}",
-                    events::EVENTS.join(", ")
-                ))
-            })
+        .map(|entry| {
+            let (name, options) = match entry {
+                Value::String(_) => (entry, None),
+                Value::Object(object) => (
+                    object.get("event").unwrap_or(&Value::Null),
+                    object.get("options"),
+                ),
+                _ => return Err(unknown(entry)),
+            };
+            let event = name.as_str().and_then(events::lookup).ok_or_else(|| unknown(name))?;
+            if options.is_some() && events::collection_field(event).is_none() {
+                return Err(RpcError::invalid_params(format!("{event} takes no options")));
+            }
+            let options = Options::parse(options)
+                .map_err(|message| RpcError::invalid_params(format!("{event}: {message}")))?;
+            Ok((event, options))
         })
         .collect()
 }
 
 fn subscribe(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
-    let names = event_names(params)?;
+    let requested = subscriptions(params)?;
     with_state(|state| {
         let connection = state
             .connections
             .get_mut(&conn)
             .ok_or_else(|| RpcError::internal("unknown connection"))?;
-        for name in names {
-            if connection.subscriptions.insert(name) {
-                connection.pending_initial.insert(name);
+        for (event, options) in requested {
+            // New subscriptions, and changed options, start with a full picture.
+            if connection.subscriptions.insert(event, options) != Some(options) {
+                connection.pending_initial.insert(event);
             }
         }
-        Ok(json!({ "events": connection.subscriptions }))
+        Ok(json!({ "events": connection.subscriptions.keys().collect::<Vec<_>>() }))
     })
 }
 
 fn unsubscribe(conn: ConnId, params: &Params) -> Result<Value, RpcError> {
-    let names = event_names(params)?;
+    let requested = subscriptions(params)?;
     with_state(|state| {
         let connection = state
             .connections
             .get_mut(&conn)
             .ok_or_else(|| RpcError::internal("unknown connection"))?;
-        for name in names {
-            connection.subscriptions.remove(name);
-            connection.pending_initial.remove(name);
+        for (event, _) in requested {
+            connection.subscriptions.remove(event);
+            connection.pending_initial.remove(event);
         }
-        Ok(json!({ "events": connection.subscriptions }))
+        Ok(json!({ "events": connection.subscriptions.keys().collect::<Vec<_>>() }))
     })
 }
 
@@ -466,7 +546,8 @@ fn debug_stats(params: &Params) -> Result<Value, RpcError> {
 /// Sends changed state to subscribers, and current state to new subscribers.
 fn poll_events() {
     let started = std::time::Instant::now();
-    let subscribers: Vec<(Sender<String>, Vec<(&'static str, bool)>)> = with_state(|state| {
+    type Wanted = Vec<(&'static str, bool, Options)>;
+    let subscribers: Vec<(Sender<String>, Wanted)> = with_state(|state| {
         state
             .connections
             .values_mut()
@@ -475,7 +556,9 @@ fn poll_events() {
                 let wanted = connection
                     .subscriptions
                     .iter()
-                    .map(|&event| (event, connection.pending_initial.contains(event)))
+                    .map(|(&event, &options)| {
+                        (event, connection.pending_initial.contains(event), options)
+                    })
                     .collect();
                 connection.pending_initial.clear();
                 (connection.outbox.clone(), wanted)
@@ -484,7 +567,7 @@ fn poll_events() {
     });
     let wanted: BTreeSet<&'static str> = subscribers
         .iter()
-        .flat_map(|(_, events)| events.iter().map(|(event, _)| *event))
+        .flat_map(|(_, events)| events.iter().map(|(event, _, _)| *event))
         .collect();
     let wanted: Vec<&'static str> = wanted.into_iter().collect();
     let mut tracker = lock(&TRACKER);
@@ -494,19 +577,21 @@ fn poll_events() {
     if wanted.is_empty() {
         return;
     }
-    // Serialize once per event, however many connections receive it.
-    let mut messages: HashMap<&'static str, String> = HashMap::new();
+    // Serialize once per distinct rendering, however many connections share it.
+    let mut messages: HashMap<(&'static str, bool, Options), String> = HashMap::new();
     for (outbox, events) in subscribers {
-        for (event, initial) in events {
+        for (event, initial, options) in events {
             if !(initial || changed.contains(&event)) {
                 continue;
             }
-            let Some(params) = tracker.params(event) else {
-                continue;
-            };
-            let message = messages.entry(event).or_insert_with(|| {
-                protocol::notification_ref(event, params)
-            });
+            let key = (event, initial, options);
+            if !messages.contains_key(&key) {
+                let Some(params) = tracker.render(event, initial, options) else {
+                    continue;
+                };
+                messages.insert(key, protocol::notification(event, params));
+            }
+            let message = &messages[&key];
             tracker.stats.record_send(event, message.len());
             let _ = outbox.send(message.clone());
         }

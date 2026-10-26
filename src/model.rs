@@ -81,10 +81,7 @@ impl ItemScratch {
 /// `item` must be a valid item in the current project.
 unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
     let reaper = Reaper::get();
-    let mut guid = [0 as c_char; 64];
-    reaper
-        .low()
-        .GetSetMediaItemInfo_String(item.as_ptr(), c"GUID".as_ptr(), guid.as_mut_ptr(), false);
+    let guid = item_guid(item);
     let take = reaper.get_active_take(item);
     let name = take.and_then(|take| {
         reaper.get_take_name(take, |name| name.ok().map(|name| name.to_str().to_owned()))
@@ -107,7 +104,7 @@ unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
         None => (None, None),
     };
     json!({
-        "guid": from_buffer(&guid),
+        "guid": guid,
         "name": name,
         "path": path,
         "track": track,
@@ -118,12 +115,62 @@ unsafe fn item_json(item: MediaItem, scratch: &mut ItemScratch) -> Value {
 }
 
 pub fn selected_items() -> Vec<Value> {
+    selected_items_page(0, usize::MAX).1
+}
+
+/// The total number of selected items, and up to `limit` of them starting at
+/// `offset`, in selection order.
+pub fn selected_items_page(offset: usize, limit: usize) -> (usize, Vec<Value>) {
     let reaper = Reaper::get();
+    let count = reaper.count_selected_media_items(CURRENT);
     let mut scratch = ItemScratch::new();
-    (0..reaper.count_selected_media_items(CURRENT))
+    let items = (0..count)
+        .skip(offset)
+        .take(limit)
         .filter_map(|index| reaper.get_selected_media_item(CURRENT, index))
         .map(|item| unsafe { item_json(item, &mut scratch) })
-        .collect()
+        .collect();
+    (count as usize, items)
+}
+
+/// # Safety
+/// `item` must be a valid item in the current project.
+unsafe fn item_guid(item: MediaItem) -> String {
+    let mut guid = [0 as c_char; 64];
+    Reaper::get()
+        .low()
+        .GetSetMediaItemInfo_String(item.as_ptr(), c"GUID".as_ptr(), guid.as_mut_ptr(), false);
+    from_buffer(&guid)
+}
+
+/// Positions of each wanted GUID in `guids`, compared case-insensitively.
+fn guid_positions(guids: &[String]) -> HashMap<String, Vec<usize>> {
+    let mut positions: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, guid) in guids.iter().enumerate() {
+        positions.entry(guid.to_ascii_uppercase()).or_default().push(index);
+    }
+    positions
+}
+
+/// Looks up items in the current project by GUID; `None` where not found.
+pub fn items_by_guid(guids: &[String]) -> Vec<Option<Value>> {
+    let reaper = Reaper::get();
+    let positions = guid_positions(guids);
+    let mut found = vec![None; guids.len()];
+    let mut scratch = ItemScratch::new();
+    for index in 0..reaper.count_media_items(CURRENT) {
+        let Some(item) = reaper.get_media_item(CURRENT, index) else {
+            continue;
+        };
+        let guid = unsafe { item_guid(item) }.to_ascii_uppercase();
+        if let Some(at) = positions.get(&guid) {
+            let json = unsafe { item_json(item, &mut scratch) };
+            for &position in at {
+                found[position] = Some(json.clone());
+            }
+        }
+    }
+    found
 }
 
 /// Identifies the current project and its edit state. Names, paths, GUIDs,
@@ -172,12 +219,43 @@ pub fn selected_tracks_fingerprint(out: &mut Vec<u64>) {
 }
 
 pub fn selected_tracks() -> Vec<Value> {
+    selected_tracks_page(0, usize::MAX).1
+}
+
+/// Like `selected_items_page`, for tracks. The master track is never included.
+pub fn selected_tracks_page(offset: usize, limit: usize) -> (usize, Vec<Value>) {
     let reaper = Reaper::get();
     let master = MasterTrackBehavior::ExcludeMasterTrack;
-    (0..reaper.count_selected_tracks_2(CURRENT, master))
+    let count = reaper.count_selected_tracks_2(CURRENT, master);
+    let tracks = (0..count)
+        .skip(offset)
+        .take(limit)
         .filter_map(|index| reaper.get_selected_track_2(CURRENT, index, master))
         .map(|track| unsafe { track_json(track) })
-        .collect()
+        .collect();
+    (count as usize, tracks)
+}
+
+/// Looks up tracks in the current project by GUID; `None` where not found.
+pub fn tracks_by_guid(guids: &[String]) -> Vec<Option<Value>> {
+    let reaper = Reaper::get();
+    let positions = guid_positions(guids);
+    let mut found = vec![None; guids.len()];
+    for index in 0..reaper.count_tracks(CURRENT) {
+        let Some(track) = reaper.get_track(CURRENT, index) else {
+            continue;
+        };
+        let Some(guid) = (unsafe { track_guid(track) }) else {
+            continue;
+        };
+        if let Some(at) = positions.get(&guid.to_ascii_uppercase()) {
+            let json = unsafe { track_json(track) };
+            for &position in at {
+                found[position] = Some(json.clone());
+            }
+        }
+    }
+    found
 }
 
 pub fn transport() -> Value {

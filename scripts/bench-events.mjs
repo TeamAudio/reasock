@@ -18,8 +18,8 @@ const allEvents = reasock.session.capabilities.events.available;
 
 let selected = 0;
 let selectionMessages = 0;
-reasock.on("items.selectionChanged", ({ selectedItems }) => {
-  selected = selectedItems.length;
+reasock.on("items.selectionChanged", ({ count }) => {
+  selected = count;
   selectionMessages++;
 });
 
@@ -44,13 +44,17 @@ if (selected === 0) throw new Error("the current project has no items to duplica
 
 const rows = [];
 for (const size of sizes) {
+  let change = null;
   while (selected < size) {
     const before = selected;
+    await reasock.call("debug.stats", { reset: true });
     await reasock.call("action.run", { command: DUPLICATE_ITEMS });
     await reasock.call("action.run", { command: SELECT_ALL_ITEMS });
     // Duplicating first selects just the copies, so wait for the full count.
     await until(() => selected > before);
     if (selected <= before) throw new Error(`action ${DUPLICATE_ITEMS} did not duplicate items`);
+    // The last doubling: a change adding as many items as were selected.
+    change = await reasock.call("debug.stats", { reset: true });
   }
 
   // A full send: re-subscribing makes ReaSock serialize the whole selection.
@@ -75,6 +79,8 @@ for (const size of sizes) {
     "items compare avg ms": items.compare.avgUs / 1000,
     "send tick ms": send.ticks.maxUs / 1000,
     "payload KB": Math.round(send.events["items.selectionChanged"].lastBytes / 1024),
+    "big change tick ms": change ? change.ticks.maxUs / 1000 : null,
+    "big change KB": change ? Math.round((change.events["items.selectionChanged"]?.lastBytes ?? 0) / 1024) : null,
     "ticks/s": Math.round(idle.ticks.count / idle.seconds),
   });
   console.log(`measured ${selected} items`);

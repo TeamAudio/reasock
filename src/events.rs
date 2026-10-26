@@ -6,7 +6,11 @@
 //! subscribers; new subscribers get the current snapshot once. Polling
 //! covers state that REAPER has no callback for (item selection, project
 //! state) and coalesces bursts to at most one notification per tick.
+//!
+//! Selections are collections: their notifications describe what changed and
+//! stay within each subscriber's limit (see `collection`).
 
+use crate::collection::{self, Collection, Delta, Options};
 use crate::model;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -25,6 +29,15 @@ pub fn lookup(name: &str) -> Option<&'static str> {
     EVENTS.iter().copied().find(|event| *event == name)
 }
 
+/// For collection events, the field that carries full entries.
+pub fn collection_field(event: &str) -> Option<&'static str> {
+    match event {
+        "items.selectionChanged" => Some("items"),
+        "tracks.selectionChanged" => Some("tracks"),
+        _ => None,
+    }
+}
+
 /// Fills `out` with a cheap fingerprint of the event's state, if it has one.
 fn fingerprint(event: &str, out: &mut Vec<u64>) -> bool {
     match event {
@@ -35,13 +48,18 @@ fn fingerprint(event: &str, out: &mut Vec<u64>) -> bool {
     true
 }
 
-fn snapshot(event: &str) -> Value {
+enum State {
+    Plain(Value),
+    Collection(Collection),
+}
+
+fn snapshot(event: &str) -> State {
     match event {
-        "transport.changed" => model::transport(),
-        "project.changed" => model::project(),
-        "project.edited" => model::project_edit(),
-        "items.selectionChanged" => json!({ "selectedItems": model::selected_items() }),
-        "tracks.selectionChanged" => json!({ "selectedTracks": model::selected_tracks() }),
+        "transport.changed" => State::Plain(model::transport()),
+        "project.changed" => State::Plain(model::project()),
+        "project.edited" => State::Plain(model::project_edit()),
+        "items.selectionChanged" => State::Collection(Collection::new(model::selected_items())),
+        "tracks.selectionChanged" => State::Collection(Collection::new(model::selected_tracks())),
         other => unreachable!("unknown event {other}"),
     }
 }
@@ -56,7 +74,9 @@ pub struct Tracker {
 
 struct Watched {
     fingerprint: Option<Vec<u64>>,
-    params: Value,
+    state: State,
+    /// For collections: what changed in the most recent poll that changed it.
+    delta: Option<Delta>,
 }
 
 /// Timing for `debug.stats`: how much main-thread time Tell costs.
@@ -150,19 +170,32 @@ impl Tracker {
             let checked = Instant::now();
             let stats = self.stats.events.entry(event).or_default();
             stats.check.record(checked - started);
-            if let Some(watched) = self.last.get(event) {
+            let previous = self.last.get(event);
+            if let Some(watched) = previous {
                 if has_fingerprint && watched.fingerprint.as_ref() == Some(&self.scratch) {
                     continue;
                 }
             }
 
-            let params = snapshot(event);
+            let state = snapshot(event);
             let snapshotted = Instant::now();
-            let is_new = self.last.get(event).map(|watched| &watched.params) != Some(&params);
+            let (is_new, delta) = match (previous.map(|watched| &watched.state), &state) {
+                (Some(State::Plain(old)), State::Plain(new)) => (old != new, None),
+                (Some(State::Collection(old)), State::Collection(new)) => {
+                    let delta = old.diff(new);
+                    (!delta.is_empty(), Some(delta))
+                }
+                _ => (true, None),
+            };
             stats.snapshot.record(snapshotted - checked);
             stats.compare.record(snapshotted.elapsed());
             let fingerprint = has_fingerprint.then(|| self.scratch.clone());
-            self.last.insert(event, Watched { fingerprint, params });
+            // Keep the last real delta when only the fingerprint moved.
+            let delta = match (is_new, self.last.remove(event)) {
+                (false, Some(watched)) => watched.delta,
+                _ => delta,
+            };
+            self.last.insert(event, Watched { fingerprint, state, delta });
             if is_new {
                 changed.push(event);
             }
@@ -170,9 +203,18 @@ impl Tracker {
         changed
     }
 
-    /// The most recent state of a polled event.
-    pub fn params(&self, event: &str) -> Option<&Value> {
-        self.last.get(event).map(|watched| &watched.params)
+    /// Notification params for a polled event. `initial` is a subscriber's
+    /// first notification; `options` apply to collection events.
+    pub fn render(&self, event: &str, initial: bool, options: Options) -> Option<Value> {
+        let watched = self.last.get(event)?;
+        Some(match &watched.state {
+            State::Plain(params) => params.clone(),
+            State::Collection(current) => {
+                let field = collection_field(event).expect("collection events have a field");
+                let delta = if initial { None } else { watched.delta.as_ref() };
+                collection::render(field, current, delta, options)
+            }
+        })
     }
 }
 

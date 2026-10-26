@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const PROTOCOL_VERSION = "0.1.0";
+export const PROTOCOL_VERSION = "0.2.0";
 
 /** Returns the most recently announced REAPER instance that is still running. */
 export function findInstance() {
@@ -98,4 +98,45 @@ export async function connect({ name, version, port = findInstance().port, timeo
     client: version ? { name, version } : { name },
   });
   return client;
+}
+
+/**
+ * Keeps a local copy of the selected items (kind "items") or tracks (kind
+ * "tracks"), keyed by GUID. Applies each selectionChanged notification, and
+ * when one is truncated, catches up by paging through `<kind>.listSelected`.
+ * `onChange(mirror)` runs after every update.
+ */
+export async function mirrorSelection(client, kind = "items", { limit = 256, onChange = () => {} } = {}) {
+  const mirror = { count: 0, entries: new Map(), resyncs: 0 };
+  let queue = Promise.resolve();
+
+  async function resync() {
+    const entries = new Map();
+    let count = 0;
+    for (let offset = 0; offset === 0 || offset < count; offset += 1000) {
+      const page = await client.call(`${kind}.listSelected`, { offset, limit: 1000 });
+      count = page.count;
+      for (const entry of page[kind]) entries.set(entry.guid, entry);
+      if (page[kind].length === 0) break;
+    }
+    mirror.entries = entries;
+    mirror.count = count;
+    mirror.resyncs++;
+  }
+
+  function apply(params) {
+    if (params.truncated) return resync();
+    for (const guid of params.removed) mirror.entries.delete(guid);
+    for (const entry of params[kind] ?? []) mirror.entries.set(entry.guid, entry);
+    mirror.count = params.count;
+  }
+
+  client.on(`${kind}.selectionChanged`, (params) => {
+    // Apply in order, even while a resync is in flight.
+    queue = queue.then(() => apply(params)).then(() => onChange(mirror));
+  });
+  await client.call("events.subscribe", {
+    events: [{ event: `${kind}.selectionChanged`, options: { include: "changed", limit } }],
+  });
+  return mirror;
 }

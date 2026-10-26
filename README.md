@@ -44,8 +44,13 @@ methods are described in [`openrpc.json`](openrpc.json)
 | `action.register` | `{id, label}` | `{command, commandId}` |
 | `action.unregister` | `{id}` | `{}` |
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
-| `events.subscribe` | `{events: [name…]}` | `{events}`: all current subscriptions |
+| `events.subscribe` | `{events: [name or {event, options}…]}` | `{events}`: all current subscriptions |
 | `events.unsubscribe` | `{events: [name…]}` | `{events}` |
+| `items.listSelected` | `{offset?, limit?}` | `{count, offset, items}` |
+| `items.get` | `{guids}` | `{items}`: each an item or `null` |
+| `tracks.listSelected` | `{offset?, limit?}` | `{count, offset, tracks}` |
+| `tracks.get` | `{guids}` | `{tracks}` |
+| `debug.stats` | `{reset?}` | main-thread time spent on events |
 
 `initialize` must come first; only `rpc.discover` is allowed before it. When a
 registered action runs, the client that owns it receives a notification. These
@@ -54,7 +59,8 @@ OpenRPC document:
 
 ```json
 {"jsonrpc": "2.0", "method": "action.triggered", "params": {"id": "hello", "command": "_REASOCK_demo_hello",
-  "context": {"selectedItems": [{"path": "/…/tone.wav", "track": "tone", "position": 0, "length": 2}]}}}
+  "context": {"selectedItems": [{"guid": "{…}", "path": "/…/tone.wav", "track": "tone", "position": 0, "length": 2}],
+    "selectedItemCount": 1, "truncated": false}}}
 ```
 
 ### Events (Tell)
@@ -74,6 +80,29 @@ notification per tick. Polling also covers state REAPER has no callback for,
 such as item selection and project state. Items and tracks carry GUIDs, which
 stay stable across sessions. `examples/inspector.mjs` prints everything as it
 happens.
+
+### Selections stay bounded
+
+The two selection events describe *what changed*, so their size doesn't grow
+with the session:
+
+```json
+{"count": 3, "added": ["{…}"], "removed": ["{…}"], "changed": ["{…}"], "items": [{…}], "truncated": false}
+```
+
+Each subscription can set `include` (`"none"`, `"changed"` (the default), or
+`"all"`) to choose which full entries come along, and `limit` (default 256,
+max 10,000) to cap how many GUIDs or entries a notification can carry:
+
+```json
+{"events": ["transport.changed", {"event": "items.selectionChanged", "options": {"include": "all", "limit": 50}}]}
+```
+
+When something the subscription asks for would exceed `limit`, it's left out
+and `truncated` is `true`. The client then catches up with
+`items.listSelected` (paged) or `items.get`. `mirrorSelection()` in
+`examples/reasock-client.mjs` does all of this and keeps a local copy of the
+selection up to date.
 
 Actions are named `_REASOCK_<client>_<id>` and are removed when their
 connection closes. Errors use the standard JSON-RPC codes, plus the
@@ -125,9 +154,14 @@ action conflict, -32012 unknown command, and so on).
   | 4,096 | 9.6 ms | 2.7 ms |
   | 16,384 | 39 ms | 8.9 ms |
 
-  Sending a change is still proportional to the selection: 16,384 items make
-  a 3 MB notification that takes ~64 ms to build (release builds,
-  `scripts/bench-events.mjs`).
+  Notifications used to carry the whole selection: 16,384 items made a 3 MB
+  notification on every change. They now carry only the change and are capped
+  by the subscriber's `limit`, so large changes arrive as a small `truncated`
+  notice. Building the snapshot after a large change is still proportional to
+  the selection (~27 ms for a change adding 8,192 items to a 16,384-item
+  selection). That's internal and can be optimized later without touching the
+  protocol, for example by hashing items instead of building their JSON.
+  (Release builds, `scripts/bench-events.mjs`.)
 - `action.run` with 40004 (File: Quit REAPER) quits cleanly when the project
   has no unsaved changes, which makes automated test runs easy.
 - Registering an action takes about one timer tick (~30 ms). A full
@@ -139,7 +173,9 @@ action conflict, -32012 unknown command, and so on).
 - Tell: more events (edit cursor, time selection, markers, tempo). Fast,
   per-track changes such as volume and FX parameters probably belong on a
   control surface (`csurf_inst`) rather than polling.
-- Ask: a general way to call REAPER API functions.
+- Ask: more of REAPER's model (all items and tracks, takes, markers, FX)
+  following the paged, GUID-keyed pattern of `items.listSelected` and
+  `items.get`.
 - A ReaScript side (`ReaSock_Send` / `ReaSock_Poll`, in the style of
   reaspeech-lib) so Lua scripts can join.
 - Launch-on-trigger: remember which client owns which actions and start it if

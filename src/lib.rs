@@ -1,4 +1,5 @@
 mod bridge;
+mod collection;
 mod discovery;
 mod events;
 mod log;

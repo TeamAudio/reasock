@@ -20,6 +20,7 @@ reasock.on("action.triggered", ({ command, context }) => {
     console.log(`   ${item.track ?? "(unnamed track)"} @ ${item.position.toFixed(3)}s: ${item.path ?? "(no file)"}`);
   }
   if (context.selectedItems.length === 0) console.log("   (no items selected)");
+  if (context.truncated) console.log(`   ...and ${context.selectedItemCount - context.selectedItems.length} more`);
   if (selfTest) reasock.close();
 });
 reasock.ws.addEventListener("close", () => process.exit(0));
