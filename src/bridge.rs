@@ -101,6 +101,21 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
 pub fn init(inbox: Receiver<Inbound>, session: ReaperSession) {
     *lock(&INBOX) = Some(inbox);
     *lock(&SESSION) = Some(session);
+    register_builtin_actions();
+}
+
+/// ReaSock's own actions, as opposed to those clients register.
+static OPEN_DOCS: std::sync::OnceLock<CommandId> = std::sync::OnceLock::new();
+
+fn register_builtin_actions() {
+    match register_custom_action("REASOCK_OPEN_DOCS", "ReaSock: Open API documentation") {
+        Ok((command, registration)) => {
+            // Registered for REAPER's lifetime.
+            Box::leak(registration);
+            let _ = OPEN_DOCS.set(command);
+        }
+        Err(error) => log!("couldn't register the documentation action: {}", error.message),
+    }
 }
 
 pub extern "C" fn on_timer() {
@@ -396,6 +411,12 @@ impl HookCommand2 for Hook {
 }
 
 fn dispatch(command: CommandId) -> bool {
+    if OPEN_DOCS.get() == Some(&command) {
+        if !crate::docs::open() {
+            log!("the API reference isn't installed; reinstall ReaSock from ReaPack");
+        }
+        return true;
+    }
     let target = with_state(|state| {
         let action = state.actions.get(&command)?;
         let connection = state.connections.get(&action.conn)?;

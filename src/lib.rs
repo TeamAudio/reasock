@@ -2,6 +2,7 @@ mod api;
 mod bridge;
 mod collection;
 mod discovery;
+mod docs;
 mod events;
 mod log;
 mod lua;

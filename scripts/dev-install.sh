@@ -12,14 +12,18 @@ else
   cargo build
 fi
 
+python3 scripts/build_docs.py
+
 case "$(uname -s)" in
   Darwin)
+    resource="$HOME/Library/Application Support/REAPER"
     src="$PWD/target/$profile/libreasock.dylib"
-    dest="$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reasock.dylib"
+    dest="$resource/UserPlugins/reaper_reasock.dylib"
     ;;
   Linux)
+    resource="$HOME/.config/REAPER"
     src="$PWD/target/$profile/libreasock.so"
-    dest="$HOME/.config/REAPER/UserPlugins/reaper_reasock.so"
+    dest="$resource/UserPlugins/reaper_reasock.so"
     ;;
   *)
     echo "unsupported platform: $(uname -s)" >&2
@@ -30,3 +34,13 @@ esac
 mkdir -p "$(dirname "$dest")"
 ln -sf "$src" "$dest"
 echo "linked $dest -> $src"
+
+# The API reference, where ReaPack would install it. Leave a real install alone.
+docs="$resource/Data/reasock"
+if [[ -L "$docs" || ! -e "$docs" ]]; then
+  mkdir -p "$resource/Data"
+  ln -sfn "$PWD/target/docs" "$docs"
+  echo "linked $docs -> $PWD/target/docs"
+else
+  echo "left $docs alone (not a symlink)"
+fi

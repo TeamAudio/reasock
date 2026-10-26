@@ -25,6 +25,10 @@ node scripts/smoke-test.mjs  # protocol checks against the running REAPER,
 cargo test                   # envelope tests, no REAPER needed
 ```
 
+`dev-install.sh` also builds the API reference (`scripts/build_docs.py`) and
+links it into REAPER's `Data/reasock/`, where the **ReaSock: Open API
+documentation** action and `ReaSock_OpenDocs()` open it.
+
 On load, ReaSock listens on `127.0.0.1`, using the first free port from 9670
 to 9679 (`REASOCK_PORT` overrides this). It writes
 `~/.reasock/instances/<pid>.json` and logs to `~/.reasock/reasock.log`.
@@ -235,3 +239,15 @@ them only when it sends something.
   GUID-keyed pattern of `items.list` and `items.get`.
 - Launch-on-trigger: remember which client owns which actions and start it if
   it's offline.
+
+## License
+
+ReaSock is free software under the GNU Lesser General Public License, version
+3 or later (`COPYING.LESSER`, which builds on the GPL in `COPYING`). Changes to
+ReaSock itself stay open; programs and scripts that talk to it can use any
+license.
+
+The protocol description (`openrpc.json`) and everything in `examples/` are
+MIT-licensed, so you can copy them into your own clients. `examples/lua/json.lua`
+is rxi's json.lua (MIT). The API reference embeds Karla (SIL OFL 1.1) and
+Roboto Slab (Apache 2.0); their licenses are in `docs/assets/`.

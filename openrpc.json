@@ -3,7 +3,7 @@
   "info": {
     "title": "ReaSock",
     "version": "0.2.0",
-    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`.",
+    "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize` before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`. Scripts inside REAPER use the same protocol through the ReaScript functions listed under `x-reascript`.",
     "license": {
       "name": "MIT"
     }
@@ -1039,6 +1039,81 @@
           }
         }
       ]
+    }
+  ],
+  "x-reascript": [
+    {
+      "name": "ReaSock_Open",
+      "returns": "int",
+      "params": [
+        {
+          "name": "client",
+          "type": "const char*"
+        }
+      ],
+      "description": "Opens a local ReaSock connection and initializes it as `client` (1-32 letters or digits). Returns the connection, or 0 if that failed. A connection that goes 10 seconds without a Call or Poll is closed."
+    },
+    {
+      "name": "ReaSock_Call",
+      "returns": "const char*",
+      "params": [
+        {
+          "name": "connection",
+          "type": "int"
+        },
+        {
+          "name": "method",
+          "type": "const char*"
+        },
+        {
+          "name": "paramsOptional",
+          "type": "const char*"
+        }
+      ],
+      "description": "Runs one ReaSock method with JSON params and returns the JSON-RPC response, with either `result` or `error`."
+    },
+    {
+      "name": "ReaSock_Send",
+      "returns": "bool",
+      "params": [
+        {
+          "name": "connection",
+          "type": "int"
+        },
+        {
+          "name": "message",
+          "type": "const char*"
+        }
+      ],
+      "description": "Sends any JSON-RPC message or batch. Replies arrive through ReaSock_Poll. Returns false if the connection is closed."
+    },
+    {
+      "name": "ReaSock_Poll",
+      "returns": "const char*",
+      "params": [
+        {
+          "name": "connection",
+          "type": "int"
+        }
+      ],
+      "description": "Returns the next waiting message (a reply, event, or action.triggered), or an empty string."
+    },
+    {
+      "name": "ReaSock_Close",
+      "returns": "void",
+      "params": [
+        {
+          "name": "connection",
+          "type": "int"
+        }
+      ],
+      "description": "Closes a local connection, removing its actions and subscriptions."
+    },
+    {
+      "name": "ReaSock_OpenDocs",
+      "returns": "bool",
+      "params": [],
+      "description": "Opens the bundled ReaSock API reference in the default browser. Returns false if it isn't installed."
     }
   ],
   "components": {

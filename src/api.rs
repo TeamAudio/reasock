@@ -677,6 +677,27 @@ fn describe_notification<N: Notification>((_, results): &mut Generators) -> Valu
     })
 }
 
+/// The ReaScript functions, for the API reference.
+fn reascript() -> Value {
+    crate::lua::FUNCTIONS
+        .iter()
+        .map(|function| {
+            let params: Vec<Value> = function
+                .params
+                .iter()
+                .map(|(kind, name)| json!({ "name": name, "type": kind }))
+                .collect();
+            json!({
+                "name": function.name,
+                "returns": function.returns,
+                "params": params,
+                "description": function.help,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
 /// The OpenRPC document for the protocol.
 pub fn document() -> Value {
     // Params describe what clients send; results and notifications describe
@@ -720,7 +741,8 @@ pub fn document() -> Value {
                 After connecting, a client must call `initialize` before anything else except \
                 `rpc.discover`. Params are always by name. Messages the server sends to clients \
                 on its own (registered actions running, and subscribed events) are listed under \
-                `x-notifications`.",
+                `x-notifications`. Scripts inside REAPER use the same protocol through the \
+                ReaScript functions listed under `x-reascript`.",
             "license": { "name": "MIT" },
         },
         "servers": [{
@@ -736,6 +758,7 @@ pub fn document() -> Value {
         }],
         "methods": methods,
         "x-notifications": notifications,
+        "x-reascript": reascript(),
         "components": { "schemas": schemas, "errors": errors },
     })
 }

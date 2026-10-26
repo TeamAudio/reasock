@@ -1,0 +1,122 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # The release workflow builds the tagged commit with this same workflow.
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit, branch, or tag to build
+        type: string
+        required: true
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `platform` is ReaPack's platform name; `asset` is the release file.
+          - platform: win64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            built: reasock.dll
+            asset: reaper_reasock-win64.dll
+            test: true
+          # 22.04 rather than 24.04: the .so needs glibc 2.35+, not 2.39+.
+          - platform: linux64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            built: libreasock.so
+            asset: reaper_reasock-linux64.so
+            test: true
+          - platform: linux-aarch64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            built: libreasock.so
+            asset: reaper_reasock-linux-aarch64.so
+            test: true
+          - platform: darwin-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            built: libreasock.dylib
+            asset: reaper_reasock-darwin-arm64.dylib
+            macos_min: "11.0"
+            test: true
+          # Cross-compiled on Apple Silicon, so its tests don't run.
+          - platform: darwin64
+            os: macos-14
+            target: x86_64-apple-darwin
+            built: libreasock.dylib
+            asset: reaper_reasock-darwin64.dylib
+            macos_min: "10.13"
+            test: false
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_min }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Test
+        if: matrix.test
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir stage
+          cp "target/${{ matrix.target }}/release/${{ matrix.built }}" "stage/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reasock-${{ matrix.platform }}
+          path: stage/${{ matrix.asset }}
+          if-no-files-found: error
+
+  docs:
+    name: API reference
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build
+        run: python3 scripts/build_docs.py --out stage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reasock-docs
+          path: stage/
+          if-no-files-found: error
