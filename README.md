@@ -119,6 +119,14 @@ connection closes. Errors use the standard JSON-RPC codes, plus the
 application codes listed in `openrpc.json` (-32001 not initialized, -32010
 action conflict, -32012 unknown command, and so on).
 
+## Clients
+
+- **TypeScript/JavaScript:** [`@techaudio/reasock`](clients/typescript/) on
+  npm, typed from `openrpc.json`, for Node 22+ and browsers.
+- **Python, Lua, shell, MCP:** see [`examples/`](examples/).
+- **Anything else:** any WebSocket library. See the API reference for the
+  messages.
+
 ## ReaScript
 
 Scripts inside REAPER use the same protocol through a local connection, so

@@ -13,6 +13,7 @@ releases/changes-<version>.md, and removes the pending files.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -21,6 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CARGO_TOML = ROOT / "Cargo.toml"
 CARGO_LOCK = ROOT / "Cargo.lock"
+NPM_PACKAGE = ROOT / "clients" / "typescript" / "package.json"
+NPM_LOCK = ROOT / "clients" / "typescript" / "package-lock.json"
 RELEASES = ROOT / "releases"
 PENDING = RELEASES / "pending"
 LEVELS = ("patch", "minor", "major")
@@ -61,7 +64,9 @@ def pending_notes() -> list[tuple[str, Path]]:
 
 
 def set_version(version: str) -> None:
-    """Updates the package version in Cargo.toml and its entry in Cargo.lock."""
+    """Sets ReaSock's version everywhere it's recorded: Cargo.toml and
+    Cargo.lock, and the npm package (which shares it) and its lock file.
+    Every change is computed before any file is written."""
     toml = CARGO_TOML.read_text(encoding="utf-8")
     toml, count = re.subn(r'(?m)^(version\s*=\s*")[^"]+(")', rf"\g<1>{version}\g<2>", toml, count=1)
     if count != 1:
@@ -72,8 +77,24 @@ def set_version(version: str) -> None:
     )
     if count != 1:
         raise ReleaseError("couldn't update reasock's version in Cargo.lock")
+
+    package = json.loads(NPM_PACKAGE.read_text(encoding="utf-8"))
+    package["version"] = version
+    npm_lock = json.loads(NPM_LOCK.read_text(encoding="utf-8"))
+    npm_lock["version"] = version
+    try:
+        npm_lock["packages"][""]["version"] = version
+    except KeyError:
+        raise ReleaseError("unexpected layout in the npm package-lock.json") from None
+
+    def as_npm(data: dict) -> str:
+        # npm writes two-space JSON with a trailing newline.
+        return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
     CARGO_TOML.write_text(toml, encoding="utf-8")
     CARGO_LOCK.write_text(lock, encoding="utf-8")
+    NPM_PACKAGE.write_text(as_npm(package), encoding="utf-8")
+    NPM_LOCK.write_text(as_npm(npm_lock), encoding="utf-8")
 
 
 def compile_notes(notes: list[tuple[str, Path]]) -> str:

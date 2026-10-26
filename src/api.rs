@@ -671,12 +671,16 @@ fn describe_method<M: Method>((params, results): &mut Generators) -> Value {
 }
 
 fn describe_notification<N: Notification>((_, results): &mut Generators) -> Value {
+    let mut params_type = results.subschema_for::<N::Params>();
+    draft07(&mut params_type);
     json!({
         "name": N::NAME,
         "summary": N::SUMMARY,
         "description": N::DESCRIPTION,
         "paramStructure": "by-name",
         "params": content_descriptors::<N::Params>(results),
+        // The named type of the whole params object, for typed clients.
+        "x-params": params_type,
     })
 }
 

@@ -1,0 +1,58 @@
+name: Publish to npm
+
+on:
+  release:
+    # Once per go-live, like the ReaPack and website publishes.
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+  # npm trusted publishing: npm verifies this workflow's OIDC token, so no
+  # npm token is stored, and the package gets a provenance attestation.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/typescript
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the package version matches the tag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          [[ "v$version" == "$TAG" ]] || { echo "::error::package.json is $version, tag is $TAG"; exit 1; }
+
+      - name: Skip versions already on npm
+        id: published
+        run: |
+          version="${TAG#v}"
+          if npm view "@techaudio/reasock@$version" version >/dev/null 2>&1; then
+            echo "@techaudio/reasock@$version is already on npm; nothing to publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.published.outputs.skip != 'true'
+        run: npm ci
+      - if: steps.published.outputs.skip != 'true'
+        run: npm run check-generated
+      - if: steps.published.outputs.skip != 'true'
+        run: npm test
+      - if: steps.published.outputs.skip != 'true'
+        run: npm publish --access public --provenance

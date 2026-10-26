@@ -3,6 +3,10 @@
 Everything here is MIT-licensed (see `LICENSE`), so copy freely into your
 own projects.
 
+For TypeScript and JavaScript, the typed [`@techaudio/reasock`](../clients/typescript/)
+package is the easiest start; `reasock-client.mjs` below is a dependency-free
+single file to copy instead.
+
 | Example | Language | Shows |
 | --- | --- | --- |
 | [`hello.mjs`](hello.mjs) | Node | Registering an action and receiving it |

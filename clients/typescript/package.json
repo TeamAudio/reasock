@@ -1,0 +1,53 @@
+{
+  "name": "@techaudio/reasock",
+  "version": "0.1.1",
+  "description": "Typed client for ReaSock, the WebSocket bridge between REAPER and other programs",
+  "license": "MIT",
+  "author": "Tech Audio (https://techaud.io)",
+  "homepage": "https://github.com/TeamAudio/reasock#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TeamAudio/reasock.git",
+    "directory": "clients/typescript"
+  },
+  "bugs": "https://github.com/TeamAudio/reasock/issues",
+  "keywords": [
+    "reaper",
+    "daw",
+    "websocket",
+    "json-rpc",
+    "audio"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.js",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "check-generated": "node scripts/generate.mjs --check",
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "npm run build && tsc -p test/tsconfig.json && node --test test/",
+    "prepublishOnly": "npm run check-generated && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^7.0.0"
+  }
+}

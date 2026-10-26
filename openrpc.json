@@ -790,7 +790,10 @@
             "$ref": "#/components/schemas/ActionContext"
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/ActionTriggered"
+      }
     },
     {
       "name": "transport.changed",
@@ -819,7 +822,10 @@
             "type": "boolean"
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/Transport"
+      }
     },
     {
       "name": "project.changed",
@@ -870,7 +876,10 @@
             "type": "boolean"
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/Project"
+      }
     },
     {
       "name": "project.edited",
@@ -899,7 +908,10 @@
             ]
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/ProjectEdit"
+      }
     },
     {
       "name": "items.selectionChanged",
@@ -977,7 +989,10 @@
             "type": "boolean"
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/ItemsChange"
+      }
     },
     {
       "name": "tracks.selectionChanged",
@@ -1055,7 +1070,10 @@
             "type": "boolean"
           }
         }
-      ]
+      ],
+      "x-params": {
+        "$ref": "#/components/schemas/TracksChange"
+      }
     }
   ],
   "x-reascript": [
@@ -1176,6 +1194,28 @@
           "truncated"
         ],
         "description": "Selected items when an action runs, capped like selection notifications."
+      },
+      "ActionTriggered": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id the action was registered with."
+          },
+          "command": {
+            "type": "string",
+            "description": "The action's named command, `_REASOCK_<client>_<id>`."
+          },
+          "context": {
+            "$ref": "#/components/schemas/ActionContext"
+          }
+        },
+        "required": [
+          "id",
+          "command",
+          "context"
+        ],
+        "description": "Params of `action.triggered`."
       },
       "Capabilities": {
         "type": "object",
@@ -1480,6 +1520,66 @@
         ],
         "description": "A media item. `guid` is stable across sessions."
       },
+      "ItemsChange": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "How many are selected."
+          },
+          "added": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs newly selected. Omitted, like `removed` and `changed`,\nwhen the change is larger than the subscription's `limit`."
+          },
+          "removed": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs no longer selected."
+          },
+          "changed": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs still selected whose details changed."
+          },
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "description": "Full entries, per the subscription's `include` option, in\nselection order."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Something this subscription asks for was left out because it\nexceeded `limit`. Page through the selection to catch up."
+          }
+        },
+        "required": [
+          "count",
+          "truncated"
+        ],
+        "description": "Params of `items.selectionChanged`."
+      },
       "ItemsFound": {
         "type": "object",
         "properties": {
@@ -1643,6 +1743,29 @@
           "dirty"
         ],
         "description": "Params of `project.changed`."
+      },
+      "ProjectEdit": {
+        "type": "object",
+        "properties": {
+          "stateChangeCount": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "Increases with every change to the project."
+          },
+          "lastUndo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description of the most recent undo point, for example \"Move media items\"."
+          }
+        },
+        "required": [
+          "stateChangeCount",
+          "lastUndo"
+        ],
+        "description": "Params of `project.edited`."
       },
       "RanAction": {
         "type": "object",
@@ -1861,6 +1984,66 @@
           "number"
         ],
         "description": "A track. `guid` is stable across sessions."
+      },
+      "TracksChange": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "How many are selected."
+          },
+          "added": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs newly selected. Omitted, like `removed` and `changed`,\nwhen the change is larger than the subscription's `limit`."
+          },
+          "removed": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs no longer selected."
+          },
+          "changed": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "GUIDs still selected whose details changed."
+          },
+          "tracks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Track"
+            },
+            "description": "Full entries, per the subscription's `include` option, in\nselection order."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Something this subscription asks for was left out because it\nexceeded `limit`. Page through the selection to catch up."
+          }
+        },
+        "required": [
+          "count",
+          "truncated"
+        ],
+        "description": "Params of `tracks.selectionChanged`."
       },
       "TracksFound": {
         "type": "object",

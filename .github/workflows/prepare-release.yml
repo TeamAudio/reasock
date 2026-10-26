@@ -48,6 +48,7 @@ jobs:
           git push origin "$branch"
 
           gh label create release-prep --description "Automated release prep PR" --color 5319e7 --force
+          # shellcheck disable=SC2016 # the backticks are literal Markdown
           body="$(printf 'Automated release prep.\n\n- Version: v%s\n- Bump: %s\n- Notes: `%s`\n\nMerging this tags v%s and builds a signed draft release.\n' \
             "$VERSION" "$LEVEL" "$CHANGES" "$VERSION")"
           # REST rather than `gh pr create`, which can fail for the Actions bot.

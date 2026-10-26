@@ -100,6 +100,28 @@ jobs:
           path: stage/${{ matrix.asset }}
           if-no-files-found: error
 
+  typescript:
+    name: TypeScript client
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      - run: npm ci
+      # The types must match openrpc.json, which a Rust test keeps current.
+      - run: npm run check-generated
+      - run: npm test
+
   docs:
     name: API reference
     runs-on: ubuntu-22.04
