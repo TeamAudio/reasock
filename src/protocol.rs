@@ -4,7 +4,7 @@
 
 use serde_json::{json, Map, Value};
 
-pub const PROTOCOL_VERSION: &str = "0.3.0";
+pub const PROTOCOL_VERSION: &str = "0.4.0";
 
 /// An application error: a code outside JSON-RPC's reserved range, with a
 /// name for the OpenRPC document.
@@ -56,6 +56,12 @@ pub const NOT_FOUND: AppError = AppError {
     message: "nothing in the current project has that GUID",
 };
 
+pub const MEDIA_UNAVAILABLE: AppError = AppError {
+    name: "MediaUnavailable",
+    code: -32015,
+    message: "REAPER can't open that media file",
+};
+
 pub const APP_ERRORS: &[&AppError] = &[
     &NOT_INITIALIZED,
     &ALREADY_INITIALIZED,
@@ -65,12 +71,15 @@ pub const APP_ERRORS: &[&AppError] = &[
     &UNKNOWN_COMMAND,
     &REGISTRATION_FAILED,
     &NOT_FOUND,
+    &MEDIA_UNAVAILABLE,
 ];
 
 #[derive(Debug, PartialEq)]
 pub struct RpcError {
     pub code: i64,
     pub message: String,
+    /// Details for the client, sent as the error's `data`.
+    pub data: Option<Value>,
 }
 
 impl RpcError {
@@ -78,7 +87,13 @@ impl RpcError {
         Self {
             code,
             message: message.into(),
+            data: None,
         }
+    }
+
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(data);
+        self
     }
 
     pub fn parse_error(message: impl Into<String>) -> Self {
@@ -183,11 +198,11 @@ fn handle_message(
 }
 
 fn error_response(id: Value, error: RpcError) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": error.code, "message": error.message },
-    })
+    let mut body = json!({ "code": error.code, "message": error.message });
+    if let Some(data) = error.data {
+        body["data"] = data;
+    }
+    json!({ "jsonrpc": "2.0", "id": id, "error": body })
 }
 
 /// Serializes a server-to-client notification.

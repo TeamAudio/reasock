@@ -6,7 +6,9 @@ REAPER, without each one writing its own extension.
 It carries three directions of traffic:
 
 - **Ask**: a client calls into REAPER: the project, transport, tracks, items,
-  takes, and markers, and running any action.
+  takes, and markers; running any action; and changing the project: placing
+  media files on the timeline, and setting notes, take names, and extension
+  data.
 - **Tell**: REAPER pushes events to subscribers: project and transport changes,
   edits, and item and track selection.
 - **Lend**: a client registers actions in REAPER's action list. Users can bind
@@ -49,24 +51,32 @@ code and served by `rpc.discover`, so it always matches the running server.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{protocolVersion, client: {name, version?}, capabilities?}` | `{protocolVersion, server, reaper, connection, capabilities}` |
+| `initialize` | `{protocolVersion, client: {name, version?}, token?, capabilities?}` | `{protocolVersion, server, reaper, connection, capabilities}` |
 | `rpc.discover` | | the OpenRPC document |
 | `action.register` | `{id, label}` | `{command, commandId}` |
 | `action.unregister` | `{id}` | `{}` |
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
 | `events.subscribe` | `{events: [name or {event, options}…]}` | `{events}`: all current subscriptions |
 | `events.unsubscribe` | `{events: [name…]}` | `{events}` |
-| `project.get` / `transport.get` | | the current project / transport state |
-| `items.list` | `{offset?, limit?, track?}` | `{count, offset, items}`: all items, or one track's |
-| `items.listSelected` | `{offset?, limit?}` | `{count, offset, items}` |
-| `items.get` | `{guids}` | `{items}`: each an item or `null` |
-| `takes.list` | `{item}` | `{item, takes}` |
+| `project.get` / `transport.get` | | the current project / transport state (play state, edit cursor, time selection) |
+| `items.list` | `{offset?, limit?, track?, notes?, ext?}` | `{count, offset, items}`: all items, or one track's |
+| `items.listSelected` | `{offset?, limit?, notes?, ext?}` | `{count, offset, items}` |
+| `items.get` | `{guids, notes?, ext?}` | `{items}`: each an item or `null` |
+| `items.insert` | `{files: [{path, sourceStart?, length?, name?, notes?, ext?}…], position?, track?, arrange?, …}` | `{items}`: the new items |
+| `items.set` | `{items: [{guid, notes?, ext?}…], undo?}` | `{}` |
+| `takes.list` | `{item, ext?}` | `{item, takes}` |
+| `takes.set` | `{takes: [{guid, name?, ext?}…], undo?}` | `{}` |
 | `tracks.list` / `tracks.listSelected` | `{offset?, limit?}` | `{count, offset, tracks}` |
 | `tracks.get` | `{guids}` | `{tracks}` |
 | `markers.list` | `{offset?, limit?}` | `{count, offset, markers}`: markers and regions |
-| `debug.stats` | `{reset?}` | main-thread time spent on events |
+| `debug.stats` | `{reset?}` | main-thread time spent on events and calls |
 
-`initialize` must come first; only `rpc.discover` is allowed before it. When a
+`initialize` must come first; only `rpc.discover` is allowed before it. Its
+result lists the methods the server supports in `capabilities.methods`
+(since protocol 0.4.0; when it's missing, the server has only protocol
+0.3.0's methods), so a client can hide features an older ReaSock lacks. The
+server answers with its own `protocolVersion` and never refuses a different
+one; the client decides whether to continue. When a
 registered action runs, the client that owns it receives a notification. These
 server-to-client notifications are listed under `x-notifications` in the
 OpenRPC document:
@@ -81,10 +91,10 @@ OpenRPC document:
 
 | Notification | When |
 | --- | --- |
-| `transport.changed` | play, pause, or record state changes |
+| `transport.changed` | play, pause, or record state, the edit cursor, or the time selection changes (not the play position moving) |
 | `project.changed` | another tab becomes current, or the project is opened, saved, or becomes dirty |
 | `project.edited` | an undoable change happens; includes the undo description |
-| `items.selectionChanged` | the selection changes, or a selected item moves, is trimmed, or is renamed |
+| `items.selectionChanged` | the selection changes, or a selected item moves, is trimmed, slip-edited, or renamed |
 | `tracks.selectionChanged` | the track selection changes, or a selected track is renamed or moved |
 
 A new subscriber gets the current state of each event right away, then only
@@ -117,6 +127,33 @@ and `truncated` is `true`. The client then catches up with
 `items.listSelected` (paged) or `items.get`. `mirrorSelection()` in
 `examples/reasock-client.mjs` does all of this and keeps a local copy of the
 selection up to date.
+
+### Changing the project
+
+`items.insert` places media files, or parts of them, on the timeline: at the
+edit cursor or a given time; on a track given by GUID, the current track
+(selected, else last touched, as REAPER's own insert does), or a new one; one
+after another, each on its own track, or as takes of one item. Each file can
+bring a take name, item notes, and extension data. `items.set` and
+`takes.set` change notes, take names, and extension data in batches.
+
+- Every call is one undo point, named after the client unless it passes
+  `undo`. Everything is checked before anything changes, so a request with
+  one bad file or unknown GUID changes nothing. A file REAPER can't use is
+  reported as `MediaUnavailable` with `data: {index, path, reason}`.
+- Extension data is a per-item or per-take string, saved in the project
+  (`P_EXT:<key>`, readable from ReaScript too). Prefix keys with your app's
+  name, such as `myapp.id`. Values are at most 64 KiB, and `null` removes a
+  key. Writes are undoable like any edit, and they mark the project unsaved,
+  so write in response to something the user did rather than whenever a
+  project opens. (Writing without an undo point isn't offered: REAPER's undo
+  restores items whole, so such data vanishes on the next undo or redo that
+  touches the item.)
+- Peaks for new items are built a slice per timer tick, so long files don't
+  stall REAPER. New items get no fades.
+- `Item` describes the active take's `startOffset` and `playRate`, and
+  `loopSource`. For a reversed take, REAPER wraps the file in a section, so
+  `startOffset` counts from the end of the file; `path` is still the file.
 
 Actions are named `_REASOCK_<client>_<id>` and are removed when their
 connection closes. Errors use the standard JSON-RPC codes, plus the
@@ -291,6 +328,24 @@ sandboxed frames from any site send it.
   has no unsaved changes, which makes automated test runs easy.
 - Registering an action takes about one timer tick (~30 ms). A full
   register → run → triggered round trip takes ~130 ms.
+- **Undo restores items whole.** Extension data written without an undo point
+  was gone after the next undo *or redo* of any edit to the same item, so
+  every write is an undo point.
+- **Sources created through the API get no peaks** until something builds
+  them ("Peaks: Build any missing peaks" works, but builds everything at once).
+  `items.insert` builds them with `PCM_Source_BuildPeaks`, a slice per timer
+  tick: inserting a 10-minute stereo file took 32 ms, and other calls kept
+  answering within a tick while its peaks were built.
+- REAPER's own insert, with no track selected, uses the last touched track;
+  `items.insert`'s default `current` track does the same.
+- **Listing items costs ~2.5 µs each.** On a 16,384-item project, a page of
+  1,000 from `items.list` takes 2.5 ms of main-thread time (2.9 ms with two
+  extension data keys), and the whole project ~44 ms. A client that pages
+  through after `project.edited`, with a debounce, stays cheap; a separate
+  "distinct sources" method would have to walk every item too. Inserting
+  takes ~0.1 ms per file in batches of 1,000, and ~1.1 ms for a single file
+  with its undo point. (Release builds, `scripts/bench-items.mjs`;
+  `debug.stats` now reports per-method main-thread time.)
 
 ## Next
 
@@ -299,11 +354,14 @@ sandboxed frames from any site send it.
   and enforce a constraint. Full JSON Schema validation (`jsonschema`) was
   measured at +58 crates and roughly 4x the extension's size, so it's ruled
   out.
-- Tell: more events (edit cursor, time selection, markers, tempo). Fast,
-  per-track changes such as volume and FX parameters probably belong on a
-  control surface (`csurf_inst`) rather than polling.
+- Tell: more events (markers, tempo, a finished render if REAPER offers a
+  hook). Fast, per-track changes such as volume and FX parameters probably
+  belong on a control surface (`csurf_inst`) rather than polling.
+- Lend: actions with an on/off state (a checkmark in menus and toolbars).
 - Ask: more of REAPER's model (FX, envelopes, routing) following the paged,
-  GUID-keyed pattern of `items.list` and `items.get`.
+  GUID-keyed pattern of `items.list` and `items.get`; more writes, such as
+  pointing a take at a moved or renamed file, and inserting at the play
+  position.
 - Launch-on-trigger: remember which client owns which actions and start it if
   it's offline.
 

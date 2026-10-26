@@ -131,6 +131,7 @@ pub extern "C" fn on_timer() {
             handle_inbound(message);
         }
         close_idle_locals();
+        crate::edit::build_peaks();
         poll_events();
     });
     if result.is_err() {
@@ -151,8 +152,7 @@ fn handle_inbound(message: Inbound) {
             state.connections.insert(conn, connection);
         }),
         Inbound::Message { conn, text } => {
-            let reply =
-                protocol::handle_text(&text, |method, params| api::call(conn, method, params));
+            let reply = protocol::handle_text(&text, |method, params| timed_call(conn, method, params));
             if let Some(reply) = reply {
                 send(conn, reply);
             }
@@ -260,6 +260,10 @@ pub fn initialize(conn: ConnId, params: InitializeParams) -> Result<InitializeRe
             events: EventCapabilities {
                 available: EventName::ALL.to_vec(),
             },
+            methods: crate::api::methods()
+                .iter()
+                .map(|entry| entry.name.to_owned())
+                .collect(),
         },
     })
 }
@@ -449,7 +453,8 @@ fn dispatch(command: CommandId) -> bool {
 
 /// Selected items when an action runs, capped like collection notifications.
 fn action_context() -> ActionContext {
-    let (count, items) = model::selected_items_page(0, collection::DEFAULT_LIMIT);
+    let (count, items) =
+        model::selected_items_page(0, collection::DEFAULT_LIMIT, model::Extras::default());
     ActionContext {
         truncated: count > items.len(),
         selected_items: items,
@@ -520,6 +525,19 @@ pub fn unsubscribe(conn: ConnId, params: SubscriptionParams) -> Result<Subscript
             events: connection.subscriptions.keys().copied().collect(),
         })
     })
+}
+
+/// Runs a call and records its main-thread time for `debug.stats`.
+fn timed_call(conn: ConnId, method: &str, params: protocol::Params) -> Result<serde_json::Value, RpcError> {
+    let started = std::time::Instant::now();
+    let result = api::call(conn, method, params);
+    let elapsed = started.elapsed();
+    // Only after the call: `debug.stats` itself takes this lock.
+    lock(&TRACKER)
+        .get_or_insert_with(Tracker::default)
+        .stats
+        .record_call(method, elapsed);
+    result
 }
 
 pub fn debug_stats(params: DebugStatsParams) -> DebugStats {
@@ -622,7 +640,7 @@ fn touch_local(conn: ConnId) -> bool {
 /// Handles one JSON-RPC text for `conn`. No lock is held while it runs: an
 /// action it runs may start a script that calls back into ReaSock.
 fn handle_local(conn: ConnId, text: &str) -> Option<String> {
-    protocol::handle_text(text, |method, params| api::call(conn, method, params))
+    protocol::handle_text(text, |method, params| timed_call(conn, method, params))
 }
 
 fn error_reply(code: i64, message: &str) -> String {

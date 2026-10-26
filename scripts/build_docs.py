@@ -88,6 +88,9 @@ def type_of(schema: dict | bool | None) -> str:
             rendered.append(f"{type_of(schema.get('items'))}[]")
         elif kind == "object" and isinstance(schema.get("additionalProperties"), dict):
             rendered.append(f"map of {type_of(schema['additionalProperties'])}")
+        elif kind == "object" and schema.get("patternProperties"):
+            values = " | ".join(type_of(value) for value in schema["patternProperties"].values())
+            rendered.append(f"map of {values}")
         else:
             rendered.append(esc(kind))
     return " | ".join(rendered)

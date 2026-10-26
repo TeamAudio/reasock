@@ -4,6 +4,7 @@ mod collection;
 mod config;
 mod discovery;
 mod docs;
+mod edit;
 mod events;
 mod log;
 mod lua;

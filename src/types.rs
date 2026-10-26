@@ -35,6 +35,23 @@ pub struct Item {
     pub length: f64,
     /// How many takes the item has; see `takes.list`.
     pub take_count: usize,
+    /// GUID of the active take, or null for an empty item.
+    pub take_guid: Option<String>,
+    /// Seconds into the active take's source where the item starts playing.
+    pub start_offset: Option<f64>,
+    /// The active take's playback rate; 1.0 is normal speed.
+    pub play_rate: Option<f64>,
+    /// Whether the item repeats its source when it's longer than the source.
+    /// When it does, `startOffset + length * playRate` can run past the end
+    /// of the file.
+    pub loop_source: bool,
+    /// The item's notes. Only present when asked for with `notes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// Extension data for the keys asked for with `ext`; null where a key
+    /// isn't set. Only present when asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ext: Option<BTreeMap<String, Option<String>>>,
 }
 
 impl Keyed for Item {
@@ -72,6 +89,10 @@ pub struct Take {
     pub start_offset: f64,
     /// 1.0 is normal speed.
     pub play_rate: f64,
+    /// Extension data for the keys asked for with `ext`; null where a key
+    /// isn't set. Only present when asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ext: Option<BTreeMap<String, Option<String>>>,
 }
 
 /// A marker or region.
@@ -92,10 +113,22 @@ pub struct Marker {
 
 /// Params of `transport.changed`.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Transport {
     pub playing: bool,
     pub paused: bool,
     pub recording: bool,
+    /// Seconds from the project start.
+    pub edit_cursor: f64,
+    /// Null when nothing is selected.
+    pub time_selection: Option<TimeRange>,
+}
+
+/// A span of the timeline, in seconds from the project start.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct TimeRange {
+    pub start: f64,
+    pub end: f64,
 }
 
 /// Params of `project.changed`.
@@ -416,6 +449,9 @@ pub struct ReaperInfo {
 pub struct Capabilities {
     pub actions: ActionCapabilities,
     pub events: EventCapabilities,
+    /// Every method this server supports. Added in protocol 0.4.0: when it's
+    /// missing, the server supports only the methods of protocol 0.3.0.
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -509,6 +545,39 @@ pub struct ItemsListParams {
     pub limit: Option<usize>,
     /// GUID of a track, to list only its items.
     pub track: Option<String>,
+    /// Include each item's notes.
+    pub notes: Option<bool>,
+    /// Include these extension data keys.
+    #[schemars(length(max = 64))]
+    pub ext: Option<Vec<ExtKey>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SelectedItemsParams {
+    /// Defaults to 0.
+    pub offset: Option<usize>,
+    /// Defaults to 256.
+    #[schemars(range(min = 1, max = 10000))]
+    pub limit: Option<usize>,
+    /// Include each item's notes.
+    pub notes: Option<bool>,
+    /// Include these extension data keys.
+    #[schemars(length(max = 64))]
+    pub ext: Option<Vec<ExtKey>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ItemsGetParams {
+    /// Compared case-insensitively.
+    #[schemars(length(min = 1, max = 10000))]
+    pub guids: Vec<String>,
+    /// Include each item's notes.
+    pub notes: Option<bool>,
+    /// Include these extension data keys.
+    #[schemars(length(max = 64))]
+    pub ext: Option<Vec<ExtKey>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -516,6 +585,65 @@ pub struct ItemsListParams {
 pub struct TakesListParams {
     /// GUID of the item.
     pub item: String,
+    /// Include these extension data keys.
+    #[schemars(length(max = 64))]
+    pub ext: Option<Vec<ExtKey>>,
+}
+
+/// An extension data key: up to 128 ASCII letters, digits, and `_ . : -`.
+/// Start keys with your app's name, such as `myapp.id`, so they don't clash
+/// with other programs'. REAPER saves the data in the project.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct ExtKey(#[schemars(regex(pattern = EXT_KEY_PATTERN))] pub String);
+
+pub const EXT_KEY_PATTERN: &str = "^[A-Za-z0-9_.:-]{1,128}$";
+
+/// The largest extension data value, in bytes.
+pub const MAX_EXT_VALUE: usize = 65536;
+
+/// Changes to one item. Fields left out are left alone.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ItemChanges {
+    pub guid: String,
+    /// Replaces the item's notes.
+    pub notes: Option<String>,
+    /// Sets each key to its value (at most 64 KiB), or removes it when null.
+    pub ext: Option<BTreeMap<ExtKey, Option<String>>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetItemsParams {
+    #[schemars(length(min = 1, max = 10000))]
+    pub items: Vec<ItemChanges>,
+    /// The undo point's description. Defaults to "Set item properties
+    /// (ReaSock: <client>)".
+    #[schemars(length(min = 1))]
+    pub undo: Option<String>,
+}
+
+/// Changes to one take. Fields left out are left alone.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TakeChanges {
+    pub guid: String,
+    /// Renames the take.
+    pub name: Option<String>,
+    /// Sets each key to its value (at most 64 KiB), or removes it when null.
+    pub ext: Option<BTreeMap<ExtKey, Option<String>>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetTakesParams {
+    #[schemars(length(min = 1, max = 10000))]
+    pub takes: Vec<TakeChanges>,
+    /// The undo point's description. Defaults to "Set take properties
+    /// (ReaSock: <client>)".
+    #[schemars(length(min = 1))]
+    pub undo: Option<String>,
 }
 
 /// Result of `takes.list`.
@@ -546,6 +674,119 @@ pub struct GuidsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InsertParams {
+    /// In the order they're placed.
+    #[schemars(length(min = 1, max = 1000))]
+    pub files: Vec<InsertFile>,
+    /// Where the files start: seconds from the project start, or `cursor` for
+    /// the edit cursor. Defaults to `cursor`.
+    pub position: Option<InsertPosition>,
+    /// Which track: a track's GUID; `current` for the first selected track,
+    /// else the last touched one, else a new track (what REAPER's own insert
+    /// uses); `selected` for the first selected track only; or `new`. New
+    /// tracks go after the first selected track, else after the last touched
+    /// one, else at the end. Defaults to `current`.
+    pub track: Option<TrackTarget>,
+    /// How several files are laid out. Defaults to `sequence`.
+    pub arrange: Option<Arrange>,
+    /// Seconds between files in a `sequence`. Defaults to 0.
+    #[schemars(range(min = 0))]
+    pub gap: Option<f64>,
+    /// Name for tracks this call creates.
+    pub track_name: Option<String>,
+    /// The undo point's description. Defaults to "Insert media (ReaSock:
+    /// <client>)".
+    #[schemars(length(min = 1))]
+    pub undo: Option<String>,
+    /// Select the new items, and only them, as REAPER's own insert does.
+    /// Defaults to true.
+    pub select: Option<bool>,
+    /// Move the edit cursor to the end of the last new item. Defaults to
+    /// false.
+    pub move_cursor: Option<bool>,
+}
+
+/// A media file to insert, or part of one.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InsertFile {
+    /// Absolute path of an audio, video, or MIDI file.
+    #[schemars(length(min = 1))]
+    pub path: String,
+    /// Seconds into the file where the item starts playing. Defaults to 0.
+    /// Not supported for MIDI files.
+    #[schemars(range(min = 0))]
+    pub source_start: Option<f64>,
+    /// Seconds of the file to use, more than 0. Defaults to the rest of the
+    /// file after `sourceStart`. A range up to 1 ms past the end of the file
+    /// is shortened to fit. Not supported for MIDI files.
+    #[schemars(range(min = 0))]
+    pub length: Option<f64>,
+    /// The take's name. Defaults to the file's name.
+    pub name: Option<String>,
+    /// The new item's notes.
+    pub notes: Option<String>,
+    /// Extension data for the new item (at most 64 KiB per value), saved as
+    /// part of the insert's undo point.
+    pub ext: Option<BTreeMap<ExtKey, String>>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Arrange {
+    /// One after another on one track.
+    #[default]
+    Sequence,
+    /// Each file on its own new track (after the target track), all at the
+    /// same position.
+    Tracks,
+    /// All files as takes of one item, as long as the longest file. The first
+    /// file's take is active.
+    Takes,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum InsertPosition {
+    Keyword(PositionKeyword),
+    Seconds(#[schemars(range(min = 0))] f64),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PositionKeyword {
+    /// The edit cursor.
+    Cursor,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TrackTarget {
+    Keyword(TrackKeyword),
+    /// A track's GUID.
+    Guid(#[schemars(length(min = 1))] String),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackKeyword {
+    /// The first selected track, else the last touched one, else a new track.
+    Current,
+    /// The first selected track only.
+    Selected,
+    /// A new track.
+    New,
+}
+
+/// Result of `items.insert`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Inserted {
+    /// The new items, in the order of `files`.
+    pub items: Vec<Item>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DebugStatsParams {
     /// Start a new measurement window after reading.
@@ -560,6 +801,9 @@ pub struct DebugStats {
     /// Per timer tick: snapshots, comparisons, and serializing notifications.
     pub ticks: Timing,
     pub events: BTreeMap<EventName, EventTiming>,
+    /// Per method: calls, and their time on the main thread (not counting
+    /// serializing the reply).
+    pub methods: BTreeMap<String, Timing>,
 }
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
@@ -600,6 +844,12 @@ mod tests {
             position: 1.5,
             length: 2.0,
             take_count: 1,
+            take_guid: Some("{K}".into()),
+            start_offset: Some(0.25),
+            play_rate: Some(1.0),
+            loop_source: false,
+            notes: None,
+            ext: None,
         }
     }
 
@@ -625,6 +875,8 @@ mod tests {
                 "items": [{
                     "guid": "{A}", "name": "kick", "path": null, "track": "Drums",
                     "trackGuid": "{T}", "position": 1.5, "length": 2.0, "takeCount": 1,
+                    "takeGuid": "{K}", "startOffset": 0.25, "playRate": 1.0,
+                    "loopSource": false,
                 }],
                 "truncated": false,
             })

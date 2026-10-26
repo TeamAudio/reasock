@@ -13,8 +13,8 @@ use crate::collection;
 use crate::model;
 use crate::protocol::{
     self, AppError, Params, RpcError, ACTION_CONFLICT, ALREADY_INITIALIZED, APP_ERRORS,
-    NOT_FOUND, NOT_INITIALIZED, REGISTRATION_FAILED, UNAUTHORIZED, UNKNOWN_ACTION,
-    UNKNOWN_COMMAND,
+    MEDIA_UNAVAILABLE, NOT_FOUND, NOT_INITIALIZED, REGISTRATION_FAILED, UNAUTHORIZED,
+    UNKNOWN_ACTION, UNKNOWN_COMMAND,
 };
 use crate::server::ConnId;
 use crate::types::*;
@@ -108,6 +108,7 @@ impl Method for Initialize {
                     "capabilities": {
                         "actions": { "register": true, "run": true },
                         "events": { "available": EventName::ALL },
+                        "methods": methods().iter().map(|entry| entry.name).collect::<Vec<_>>(),
                     },
                 },
             },
@@ -260,7 +261,7 @@ impl Method for GetProject {
 struct GetTransport;
 impl Method for GetTransport {
     const NAME: &'static str = "transport.get";
-    const SUMMARY: &'static str = "Get the play, pause, and record state";
+    const SUMMARY: &'static str = "Get the play state, edit cursor, and time selection";
     type Params = NoParams;
     type Result = Transport;
 
@@ -285,7 +286,7 @@ fn paging(offset: Option<usize>, limit: Option<usize>) -> Result<(usize, usize),
     Ok((offset.unwrap_or(0), limit))
 }
 
-fn not_found(what: &str, guid: &str) -> RpcError {
+pub fn not_found(what: &str, guid: &str) -> RpcError {
     RpcError::app(&NOT_FOUND, format!("no {what} with GUID {guid}"))
 }
 
@@ -314,7 +315,8 @@ impl Method for ListItems {
             Some(guid) => Some(model::find_track(guid).ok_or_else(|| not_found("track", guid))?),
             None => None,
         };
-        let (count, items) = model::items_page(offset, limit, track);
+        let extras = extras(params.notes, params.ext.as_deref())?;
+        let (count, items) = model::items_page(offset, limit, track, extras);
         Ok(ItemsPage { count, offset, items })
     }
 }
@@ -328,9 +330,10 @@ impl Method for ListTakes {
     type Result = Takes;
 
     fn call(_: &Ctx, params: TakesListParams) -> Result<Takes, RpcError> {
+        extras(None, params.ext.as_deref())?;
         let item = model::find_item(&params.item).ok_or_else(|| not_found("item", &params.item))?;
         Ok(Takes {
-            takes: unsafe { model::takes(item) },
+            takes: unsafe { model::takes(item, params.ext.as_deref()) },
             item: params.item,
         })
     }
@@ -369,12 +372,13 @@ struct ListSelectedItems;
 impl Method for ListSelectedItems {
     const NAME: &'static str = "items.listSelected";
     const SUMMARY: &'static str = "Get the selected items, a page at a time";
-    type Params = PageParams;
+    type Params = SelectedItemsParams;
     type Result = ItemsPage;
 
-    fn call(_: &Ctx, params: PageParams) -> Result<ItemsPage, RpcError> {
-        let (offset, limit) = page(&params)?;
-        let (count, items) = model::selected_items_page(offset, limit);
+    fn call(_: &Ctx, params: SelectedItemsParams) -> Result<ItemsPage, RpcError> {
+        let (offset, limit) = paging(params.offset, params.limit)?;
+        let extras = extras(params.notes, params.ext.as_deref())?;
+        let (count, items) = model::selected_items_page(offset, limit, extras);
         Ok(ItemsPage { count, offset, items })
     }
 }
@@ -384,13 +388,74 @@ impl Method for GetItems {
     const NAME: &'static str = "items.get";
     const SUMMARY: &'static str = "Look up items by GUID";
     const DESCRIPTION: &'static str = "Searches the current project.";
-    type Params = GuidsParams;
+    type Params = ItemsGetParams;
     type Result = ItemsFound;
 
-    fn call(_: &Ctx, params: GuidsParams) -> Result<ItemsFound, RpcError> {
+    fn call(_: &Ctx, params: ItemsGetParams) -> Result<ItemsFound, RpcError> {
+        let extras = extras(params.notes, params.ext.as_deref())?;
+        let guids = guids(GuidsParams { guids: params.guids })?;
         Ok(ItemsFound {
-            items: model::items_by_guid(&guids(params)?),
+            items: model::items_by_guid(&guids, extras),
         })
+    }
+}
+
+/// The optional item fields asked for, with their keys checked.
+fn extras(notes: Option<bool>, ext: Option<&[ExtKey]>) -> Result<model::Extras<'_>, RpcError> {
+    if let Some(keys) = ext {
+        if keys.len() > 64 {
+            return Err(RpcError::invalid_params("ext can ask for at most 64 keys"));
+        }
+        keys.iter().try_for_each(crate::edit::check_key)?;
+    }
+    Ok(model::Extras {
+        notes: notes.unwrap_or(false),
+        ext,
+    })
+}
+
+struct SetItems;
+impl Method for SetItems {
+    const NAME: &'static str = "items.set";
+    const SUMMARY: &'static str = "Change items' notes and extension data";
+    const DESCRIPTION: &'static str = "Applies every change as one undo point. Every GUID is \
+        checked first, so if one isn't found, nothing changes. Extension data is saved in the \
+        project, so writing it marks the project as having unsaved changes: write it in response \
+        to something the user did, not whenever a project opens. Like any edit, it's undone by \
+        undo.";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND];
+    type Params = SetItemsParams;
+    type Result = Empty;
+
+    fn call(ctx: &Ctx, params: SetItemsParams) -> Result<Empty, RpcError> {
+        crate::edit::set_items(ctx.client(), params)
+    }
+
+    fn examples() -> Value {
+        json!([{
+            "name": "tag an item",
+            "params": [
+                { "name": "items", "value": [{
+                    "guid": "{6D1A4C1E-8E0B-4D2A-9B0F-2A3C4D5E6F70}",
+                    "ext": { "myapp.id": "8f2c", "myapp.old": null },
+                }] },
+            ],
+            "result": { "name": "result", "value": {} },
+        }])
+    }
+}
+
+struct SetTakes;
+impl Method for SetTakes {
+    const NAME: &'static str = "takes.set";
+    const SUMMARY: &'static str = "Rename takes and change their extension data";
+    const DESCRIPTION: &'static str = "Works like `items.set`, for takes.";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND];
+    type Params = SetTakesParams;
+    type Result = Empty;
+
+    fn call(ctx: &Ctx, params: SetTakesParams) -> Result<Empty, RpcError> {
+        crate::edit::set_takes(ctx.client(), params)
     }
 }
 
@@ -424,12 +489,57 @@ impl Method for GetTracks {
     }
 }
 
+struct InsertItems;
+impl Method for InsertItems {
+    const NAME: &'static str = "items.insert";
+    const SUMMARY: &'static str = "Place media files on the timeline";
+    const DESCRIPTION: &'static str = "Creates items from files, or parts of files, as a single \
+        undo point. Every file is checked before anything changes, so if one can't be used, \
+        nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: \
+        `{index, path, reason}`. New items get no fades.";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND, &MEDIA_UNAVAILABLE];
+    type Params = InsertParams;
+    type Result = Inserted;
+
+    fn call(ctx: &Ctx, params: InsertParams) -> Result<Inserted, RpcError> {
+        crate::edit::insert(ctx.client(), params)
+    }
+
+    fn examples() -> Value {
+        json!([{
+            "name": "part of a file at the edit cursor",
+            "params": [
+                { "name": "files", "value": [
+                    { "path": "/Sounds/door-slam.wav", "sourceStart": 1.25, "length": 0.8 },
+                ] },
+            ],
+            "result": {
+                "name": "result",
+                "value": { "items": [{
+                    "guid": "{6D1A4C1E-8E0B-4D2A-9B0F-2A3C4D5E6F70}",
+                    "name": "door-slam.wav",
+                    "path": "/Sounds/door-slam.wav",
+                    "track": "FX",
+                    "trackGuid": "{0E1F2A3B-4C5D-6E7F-8091-A2B3C4D5E6F7}",
+                    "position": 12.5,
+                    "length": 0.8,
+                    "takeCount": 1,
+                    "takeGuid": "{9A8B7C6D-5E4F-4031-8293-A4B5C6D7E8F9}",
+                    "startOffset": 1.25,
+                    "playRate": 1.0,
+                    "loopSource": true,
+                }] },
+            },
+        }])
+    }
+}
+
 struct GetDebugStats;
 impl Method for GetDebugStats {
     const NAME: &'static str = "debug.stats";
-    const SUMMARY: &'static str = "Main-thread time spent on events";
-    const DESCRIPTION: &'static str = "Reports how much of REAPER's main thread Tell is using, \
-        per timer tick and per event.";
+    const SUMMARY: &'static str = "Main-thread time spent on events and calls";
+    const DESCRIPTION: &'static str = "Reports how much of REAPER's main thread ReaSock is \
+        using: per timer tick and per event for notifications, and per method for calls.";
     type Params = DebugStatsParams;
     type Result = DebugStats;
 
@@ -453,8 +563,9 @@ impl Notification for ActionTriggeredNotification {
 struct TransportChanged;
 impl Notification for TransportChanged {
     const NAME: &'static str = "transport.changed";
-    const SUMMARY: &'static str = "Play, pause, or record state changed";
-    const DESCRIPTION: &'static str = "Subscribe with `events.subscribe`.";
+    const SUMMARY: &'static str = "The play state, edit cursor, or time selection changed";
+    const DESCRIPTION: &'static str = "Doesn't fire for the play position moving during \
+        playback. Subscribe with `events.subscribe`.";
     type Params = Transport;
 }
 
@@ -481,7 +592,8 @@ impl Notification for ItemsSelectionChanged {
     const NAME: &'static str = "items.selectionChanged";
     const SUMMARY: &'static str = "The item selection changed, or a selected item changed";
     const DESCRIPTION: &'static str = "Fires when items are selected or deselected, and when a \
-        selected item is moved, trimmed, or renamed (including live, while dragging). The first \
+        selected item is moved, trimmed, slip-edited, or renamed (including live, while \
+        dragging). The first \
         notification after subscribing lists every selected item as added. When `truncated` is \
         true, catch up with `items.listSelected`. Subscribe with `events.subscribe`.";
     type Params = ItemsChange;
@@ -543,6 +655,9 @@ pub fn methods() -> &'static [Entry] {
             entry::<ListItems>(),
             entry::<ListSelectedItems>(),
             entry::<GetItems>(),
+            entry::<InsertItems>(),
+            entry::<SetItems>(),
+            entry::<SetTakes>(),
             entry::<ListTakes>(),
             entry::<ListTracks>(),
             entry::<ListSelectedTracks>(),

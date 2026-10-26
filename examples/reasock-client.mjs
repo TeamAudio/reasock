@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const PROTOCOL_VERSION = "0.3.0";
+export const PROTOCOL_VERSION = "0.4.0";
 
 /**
  * Returns the most recently announced REAPER instance that is still running:
@@ -35,9 +35,10 @@ export function findInstance() {
 }
 
 export class RpcError extends Error {
-  constructor({ code, message }) {
+  constructor({ code, message, data }) {
     super(message);
     this.code = code;
+    this.data = data;
   }
 }
 

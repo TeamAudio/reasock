@@ -68,6 +68,12 @@ function object(schema, indent) {
   const properties = schema.properties ?? {};
   const names = Object.keys(properties);
   if (names.length === 0) {
+    // Keys limited by a pattern: TypeScript can't check the pattern, so any string key.
+    const patterns = Object.values(schema.patternProperties ?? {});
+    if (patterns.length > 0) {
+      const values = [...new Set(patterns.map((value) => type(value, indent)))].join(" | ");
+      return `{ [key: string]: ${values} }`;
+    }
     const values = schema.additionalProperties;
     if (values === false) return "Record<string, never>";
     return `{ [key: string]: ${type(values === undefined ? true : values, indent)} }`;

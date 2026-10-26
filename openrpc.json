@@ -2,7 +2,7 @@
   "openrpc": "1.4.1",
   "info": {
     "title": "ReaSock",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "JSON-RPC 2.0 over WebSocket between REAPER and outside programs. Each running REAPER announces itself in `~/.reasock/instances/<pid>.json`. After connecting, a client must call `initialize`, with the `token` from that file, before anything else except `rpc.discover`. Params are always by name. Messages the server sends to clients on its own (registered actions running, and subscribed events) are listed under `x-notifications`. Scripts inside REAPER use the same protocol through the ReaScript functions listed under `x-reascript`.",
     "license": {
       "name": "MIT"
@@ -84,7 +84,7 @@
           "params": [
             {
               "name": "protocolVersion",
-              "value": "0.3.0"
+              "value": "0.4.0"
             },
             {
               "name": "client",
@@ -101,7 +101,7 @@
           "result": {
             "name": "result",
             "value": {
-              "protocolVersion": "0.3.0",
+              "protocolVersion": "0.4.0",
               "server": {
                 "name": "reasock",
                 "version": "0.1.0"
@@ -123,7 +123,30 @@
                     "items.selectionChanged",
                     "tracks.selectionChanged"
                   ]
-                }
+                },
+                "methods": [
+                  "initialize",
+                  "rpc.discover",
+                  "action.register",
+                  "action.unregister",
+                  "action.run",
+                  "events.subscribe",
+                  "events.unsubscribe",
+                  "project.get",
+                  "transport.get",
+                  "items.list",
+                  "items.listSelected",
+                  "items.get",
+                  "items.insert",
+                  "items.set",
+                  "takes.set",
+                  "takes.list",
+                  "tracks.list",
+                  "tracks.listSelected",
+                  "tracks.get",
+                  "markers.list",
+                  "debug.stats"
+                ]
               }
             }
           }
@@ -391,7 +414,7 @@
     },
     {
       "name": "transport.get",
-      "summary": "Get the play, pause, and record state",
+      "summary": "Get the play state, edit cursor, and time selection",
       "paramStructure": "by-name",
       "params": [],
       "result": {
@@ -446,6 +469,30 @@
               "null"
             ]
           }
+        },
+        {
+          "name": "notes",
+          "description": "Include each item's notes.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "ext",
+          "description": "Include these extension data keys.",
+          "schema": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExtKey"
+            },
+            "maxItems": 64
+          }
         }
       ],
       "result": {
@@ -492,6 +539,30 @@
             "minimum": 1,
             "maximum": 10000
           }
+        },
+        {
+          "name": "notes",
+          "description": "Include each item's notes.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "ext",
+          "description": "Include these extension data keys.",
+          "schema": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExtKey"
+            },
+            "maxItems": 64
+          }
         }
       ],
       "result": {
@@ -524,6 +595,30 @@
             "maxItems": 10000,
             "minItems": 1
           }
+        },
+        {
+          "name": "notes",
+          "description": "Include each item's notes.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "ext",
+          "description": "Include these extension data keys.",
+          "schema": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExtKey"
+            },
+            "maxItems": 64
+          }
         }
       ],
       "result": {
@@ -539,6 +634,290 @@
       ]
     },
     {
+      "name": "items.insert",
+      "summary": "Place media files on the timeline",
+      "description": "Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: `{index, path, reason}`. New items get no fades.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "files",
+          "description": "In the order they're placed.",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InsertFile"
+            },
+            "maxItems": 1000,
+            "minItems": 1
+          }
+        },
+        {
+          "name": "position",
+          "description": "Where the files start: seconds from the project start, or `cursor` for\nthe edit cursor. Defaults to `cursor`.",
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InsertPosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "track",
+          "description": "Which track: a track's GUID; `current` for the first selected track,\nelse the last touched one, else a new track (what REAPER's own insert\nuses); `selected` for the first selected track only; or `new`. New\ntracks go after the first selected track, else after the last touched\none, else at the end. Defaults to `current`.",
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrackTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "arrange",
+          "description": "How several files are laid out. Defaults to `sequence`.",
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Arrange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "gap",
+          "description": "Seconds between files in a `sequence`. Defaults to 0.",
+          "schema": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "trackName",
+          "description": "Name for tracks this call creates.",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "undo",
+          "description": "The undo point's description. Defaults to \"Insert media (ReaSock:\n<client>)\".",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        },
+        {
+          "name": "select",
+          "description": "Select the new items, and only them, as REAPER's own insert does.\nDefaults to true.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "moveCursor",
+          "description": "Move the edit cursor to the end of the last new item. Defaults to\nfalse.",
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Inserted"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/NotFound"
+        },
+        {
+          "$ref": "#/components/errors/MediaUnavailable"
+        }
+      ],
+      "examples": [
+        {
+          "name": "part of a file at the edit cursor",
+          "params": [
+            {
+              "name": "files",
+              "value": [
+                {
+                  "path": "/Sounds/door-slam.wav",
+                  "sourceStart": 1.25,
+                  "length": 0.8
+                }
+              ]
+            }
+          ],
+          "result": {
+            "name": "result",
+            "value": {
+              "items": [
+                {
+                  "guid": "{6D1A4C1E-8E0B-4D2A-9B0F-2A3C4D5E6F70}",
+                  "name": "door-slam.wav",
+                  "path": "/Sounds/door-slam.wav",
+                  "track": "FX",
+                  "trackGuid": "{0E1F2A3B-4C5D-6E7F-8091-A2B3C4D5E6F7}",
+                  "position": 12.5,
+                  "length": 0.8,
+                  "takeCount": 1,
+                  "takeGuid": "{9A8B7C6D-5E4F-4031-8293-A4B5C6D7E8F9}",
+                  "startOffset": 1.25,
+                  "playRate": 1.0,
+                  "loopSource": true
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "items.set",
+      "summary": "Change items' notes and extension data",
+      "description": "Applies every change as one undo point. Every GUID is checked first, so if one isn't found, nothing changes. Extension data is saved in the project, so writing it marks the project as having unsaved changes: write it in response to something the user did, not whenever a project opens. Like any edit, it's undone by undo.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "items",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemChanges"
+            },
+            "minItems": 1,
+            "maxItems": 10000
+          }
+        },
+        {
+          "name": "undo",
+          "description": "The undo point's description. Defaults to \"Set item properties\n(ReaSock: <client>)\".",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Empty"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/NotFound"
+        }
+      ],
+      "examples": [
+        {
+          "name": "tag an item",
+          "params": [
+            {
+              "name": "items",
+              "value": [
+                {
+                  "guid": "{6D1A4C1E-8E0B-4D2A-9B0F-2A3C4D5E6F70}",
+                  "ext": {
+                    "myapp.id": "8f2c",
+                    "myapp.old": null
+                  }
+                }
+              ]
+            }
+          ],
+          "result": {
+            "name": "result",
+            "value": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "takes.set",
+      "summary": "Rename takes and change their extension data",
+      "description": "Works like `items.set`, for takes.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "takes",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TakeChanges"
+            },
+            "minItems": 1,
+            "maxItems": 10000
+          }
+        },
+        {
+          "name": "undo",
+          "description": "The undo point's description. Defaults to \"Set take properties\n(ReaSock: <client>)\".",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Empty"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/NotFound"
+        }
+      ]
+    },
+    {
       "name": "takes.list",
       "summary": "Get an item's takes",
       "paramStructure": "by-name",
@@ -549,6 +928,20 @@
           "required": true,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "ext",
+          "description": "Include these extension data keys.",
+          "schema": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ExtKey"
+            },
+            "maxItems": 64
           }
         }
       ],
@@ -732,8 +1125,8 @@
     },
     {
       "name": "debug.stats",
-      "summary": "Main-thread time spent on events",
-      "description": "Reports how much of REAPER's main thread Tell is using, per timer tick and per event.",
+      "summary": "Main-thread time spent on events and calls",
+      "description": "Reports how much of REAPER's main thread ReaSock is using: per timer tick and per event for notifications, and per method for calls.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -797,8 +1190,8 @@
     },
     {
       "name": "transport.changed",
-      "summary": "Play, pause, or record state changed",
-      "description": "Subscribe with `events.subscribe`.",
+      "summary": "The play state, edit cursor, or time selection changed",
+      "description": "Doesn't fire for the play position moving during playback. Subscribe with `events.subscribe`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -820,6 +1213,30 @@
           "required": true,
           "schema": {
             "type": "boolean"
+          }
+        },
+        {
+          "name": "editCursor",
+          "description": "Seconds from the project start.",
+          "required": true,
+          "schema": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        {
+          "name": "timeSelection",
+          "description": "Null when nothing is selected.",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       ],
@@ -916,7 +1333,7 @@
     {
       "name": "items.selectionChanged",
       "summary": "The item selection changed, or a selected item changed",
-      "description": "Fires when items are selected or deselected, and when a selected item is moved, trimmed, or renamed (including live, while dragging). The first notification after subscribing lists every selected item as added. When `truncated` is true, catch up with `items.listSelected`. Subscribe with `events.subscribe`.",
+      "description": "Fires when items are selected or deselected, and when a selected item is moved, trimmed, slip-edited, or renamed (including live, while dragging). The first notification after subscribing lists every selected item as added. When `truncated` is true, catch up with `items.listSelected`. Subscribe with `events.subscribe`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1217,6 +1634,25 @@
         ],
         "description": "Params of `action.triggered`."
       },
+      "Arrange": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "sequence",
+            "description": "One after another on one track."
+          },
+          {
+            "type": "string",
+            "const": "tracks",
+            "description": "Each file on its own new track (after the target track), all at the\nsame position."
+          },
+          {
+            "type": "string",
+            "const": "takes",
+            "description": "All files as takes of one item, as long as the longest file. The first\nfile's take is active."
+          }
+        ]
+      },
       "Capabilities": {
         "type": "object",
         "properties": {
@@ -1225,11 +1661,19 @@
           },
           "events": {
             "$ref": "#/components/schemas/EventCapabilities"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every method this server supports. Added in protocol 0.4.0: when it's\nmissing, the server supports only the methods of protocol 0.3.0."
           }
         },
         "required": [
           "actions",
-          "events"
+          "events",
+          "methods"
         ]
       },
       "ClientInfo": {
@@ -1327,12 +1771,20 @@
                 "$ref": "#/components/schemas/EventTiming"
               }
             }
+          },
+          "methods": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Timing"
+            },
+            "description": "Per method: calls, and their time on the main thread (not counting\nserializing the reply)."
           }
         },
         "required": [
           "seconds",
           "ticks",
-          "events"
+          "events",
+          "methods"
         ],
         "description": "How much of REAPER's main thread Tell is using. Times are in microseconds."
       },
@@ -1408,6 +1860,11 @@
           "lastBytes"
         ]
       },
+      "ExtKey": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+        "description": "An extension data key: up to 128 ASCII letters, digits, and `_ . : -`.\nStart keys with your app's name, such as `myapp.id`, so they don't clash\nwith other programs'. REAPER saves the data in the project."
+      },
       "Include": {
         "oneOf": [
           {
@@ -1458,6 +1915,94 @@
           "capabilities"
         ]
       },
+      "InsertFile": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute path of an audio, video, or MIDI file.",
+            "minLength": 1
+          },
+          "sourceStart": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Seconds into the file where the item starts playing. Defaults to 0.\nNot supported for MIDI files.",
+            "minimum": 0
+          },
+          "length": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Seconds of the file to use, more than 0. Defaults to the rest of the\nfile after `sourceStart`. A range up to 1 ms past the end of the file\nis shortened to fit. Not supported for MIDI files.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The take's name. Defaults to the file's name."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The new item's notes."
+          },
+          "ext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "patternProperties": {
+              "^[A-Za-z0-9_.:-]{1,128}$": {
+                "type": "string"
+              }
+            },
+            "description": "Extension data for the new item (at most 64 KiB per value), saved as\npart of the insert's undo point."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "description": "A media file to insert, or part of one."
+      },
+      "InsertPosition": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/PositionKeyword"
+          },
+          {
+            "type": "number",
+            "format": "double",
+            "minimum": 0
+          }
+        ]
+      },
+      "Inserted": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "description": "The new items, in the order of `files`."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "description": "Result of `items.insert`."
+      },
       "Item": {
         "type": "object",
         "properties": {
@@ -1506,6 +2051,53 @@
             "format": "uint",
             "minimum": 0,
             "description": "How many takes the item has; see `takes.list`."
+          },
+          "takeGuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "GUID of the active take, or null for an empty item."
+          },
+          "startOffset": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Seconds into the active take's source where the item starts playing."
+          },
+          "playRate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The active take's playback rate; 1.0 is normal speed."
+          },
+          "loopSource": {
+            "type": "boolean",
+            "description": "Whether the item repeats its source when it's longer than the source.\nWhen it does, `startOffset + length * playRate` can run past the end\nof the file."
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The item's notes. Only present when asked for with `notes`."
+          },
+          "ext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Extension data for the keys asked for with `ext`; null where a key\nisn't set. Only present when asked for."
           }
         },
         "required": [
@@ -1516,9 +2108,49 @@
           "trackGuid",
           "position",
           "length",
-          "takeCount"
+          "takeCount",
+          "takeGuid",
+          "startOffset",
+          "playRate",
+          "loopSource"
         ],
         "description": "A media item. `guid` is stable across sessions."
+      },
+      "ItemChanges": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "guid": {
+            "type": "string"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replaces the item's notes."
+          },
+          "ext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "patternProperties": {
+              "^[A-Za-z0-9_.:-]{1,128}$": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "description": "Sets each key to its value (at most 64 KiB), or removes it when null."
+          }
+        },
+        "required": [
+          "guid"
+        ],
+        "description": "Changes to one item. Fields left out are left alone."
       },
       "ItemsChange": {
         "type": "object",
@@ -1704,6 +2336,15 @@
           "markers"
         ],
         "description": "Result of `markers.list`."
+      },
+      "PositionKeyword": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "cursor",
+            "description": "The edit cursor."
+          }
+        ]
       },
       "Project": {
         "type": "object",
@@ -1902,6 +2543,19 @@
             "type": "number",
             "format": "double",
             "description": "1.0 is normal speed."
+          },
+          "ext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Extension data for the keys asked for with `ext`; null where a key\nisn't set. Only present when asked for."
           }
         },
         "required": [
@@ -1913,6 +2567,42 @@
           "playRate"
         ],
         "description": "A take of a media item. `guid` is stable across sessions."
+      },
+      "TakeChanges": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "guid": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Renames the take."
+          },
+          "ext": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "patternProperties": {
+              "^[A-Za-z0-9_.:-]{1,128}$": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "description": "Sets each key to its value (at most 64 KiB), or removes it when null."
+          }
+        },
+        "required": [
+          "guid"
+        ],
+        "description": "Changes to one take. Fields left out are left alone."
       },
       "Takes": {
         "type": "object",
@@ -1934,6 +2624,24 @@
           "takes"
         ],
         "description": "Result of `takes.list`."
+      },
+      "TimeRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "number",
+            "format": "double"
+          },
+          "end": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "description": "A span of the timeline, in seconds from the project start."
       },
       "Timing": {
         "type": "object",
@@ -1984,6 +2692,37 @@
           "number"
         ],
         "description": "A track. `guid` is stable across sessions."
+      },
+      "TrackKeyword": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "current",
+            "description": "The first selected track, else the last touched one, else a new track."
+          },
+          {
+            "type": "string",
+            "const": "selected",
+            "description": "The first selected track only."
+          },
+          {
+            "type": "string",
+            "const": "new",
+            "description": "A new track."
+          }
+        ]
+      },
+      "TrackTarget": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TrackKeyword"
+          },
+          {
+            "type": "string",
+            "minLength": 1,
+            "description": "A track's GUID."
+          }
+        ]
       },
       "TracksChange": {
         "type": "object",
@@ -2106,12 +2845,30 @@
           },
           "recording": {
             "type": "boolean"
+          },
+          "editCursor": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds from the project start."
+          },
+          "timeSelection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when nothing is selected."
           }
         },
         "required": [
           "playing",
           "paused",
-          "recording"
+          "recording",
+          "editCursor",
+          "timeSelection"
         ],
         "description": "Params of `transport.changed`."
       }
@@ -2148,6 +2905,10 @@
       "NotFound": {
         "code": -32014,
         "message": "nothing in the current project has that GUID"
+      },
+      "MediaUnavailable": {
+        "code": -32015,
+        "message": "REAPER can't open that media file"
       }
     }
   }

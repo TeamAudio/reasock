@@ -11,6 +11,7 @@ single file to copy instead.
 | --- | --- | --- |
 | [`hello.mjs`](hello.mjs) | Node | Registering an action and receiving it |
 | [`inspector.mjs`](inspector.mjs) | Node | Following every event as you work |
+| [`place.mjs`](place.mjs) | Node | Placing media files (or parts of them) at the edit cursor, tagged with extension data |
 | [`reasock-client.mjs`](reasock-client.mjs) | Node | A dependency-free client with `mirrorSelection()` |
 | [`python/`](python/) | Python | A client library; copying selected items' paths with a hotkey; following the selection |
 | [`dashboard/`](dashboard/) | Browser | A live dashboard in a browser tab, and how a web page connects safely (allowed origin, token from a local server) |

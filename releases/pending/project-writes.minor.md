@@ -1,0 +1,10 @@
+- Protocol 0.4.0: ReaSock can now change the project, so a sound library or media browser can place sounds in REAPER.
+  - `items.insert` places media files, or parts of them, at the edit cursor or a given time: on the current track, a given one, or a new one; one after another, each on its own track, or as takes of one item. Each file can bring a take name, item notes, and extension data. Every file is checked first, so a request with a bad file changes nothing, and the error says which file and why.
+  - `items.set` and `takes.set` change item notes, take names, and extension data (per-item and per-take strings saved in the project), in batches.
+  - Every change is one undo point, named after the client unless it passes its own name.
+  - Peaks for inserted files are built a little at a time, so long files don't stall REAPER.
+- `items.list`, `items.listSelected`, and `items.get` can include item notes and extension data; `takes.list` can include extension data.
+- Items now report their active take (`takeGuid`, `startOffset`, `playRate`) and whether they loop their source, so a client can work out which part of a file an item plays. Slip edits now count as changes in `items.selectionChanged`.
+- `transport.get` and `transport.changed` include the edit cursor and the time selection.
+- `initialize` lists the methods the server supports (`capabilities.methods`), so clients can tell what an older ReaSock lacks.
+- `debug.stats` reports main-thread time per method.

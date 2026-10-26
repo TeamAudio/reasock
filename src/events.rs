@@ -155,6 +155,7 @@ pub struct Stats {
     since: Option<Instant>,
     ticks: Accumulator,
     events: HashMap<EventName, EventStats>,
+    methods: HashMap<String, Accumulator>,
 }
 
 #[derive(Default)]
@@ -198,6 +199,19 @@ impl Stats {
         self.ticks.record(elapsed);
     }
 
+    /// Time one method call took, not counting serializing its reply.
+    pub fn record_call(&mut self, method: &str, elapsed: Duration) {
+        self.since.get_or_insert_with(Instant::now);
+        match self.methods.get_mut(method) {
+            Some(accumulator) => accumulator.record(elapsed),
+            None if crate::api::methods().iter().any(|entry| entry.name == method) => {
+                self.methods.entry(method.to_owned()).or_default().record(elapsed);
+            }
+            // Unknown methods aren't worth a map entry each.
+            None => {}
+        }
+    }
+
     pub fn record_send(&mut self, event: EventName, bytes: usize) {
         let stats = self.events.entry(event).or_default();
         stats.sent += 1;
@@ -223,6 +237,11 @@ impl Stats {
             seconds: self.since.map(|since| since.elapsed().as_secs_f64()).unwrap_or(0.0),
             ticks: self.ticks.timing(),
             events,
+            methods: self
+                .methods
+                .iter()
+                .map(|(method, accumulator)| (method.clone(), accumulator.timing()))
+                .collect(),
         }
     }
 }

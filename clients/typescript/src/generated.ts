@@ -2,7 +2,7 @@
 // run `npm run generate` after the protocol changes.
 
 /** The protocol version these types describe. */
-export const PROTOCOL_VERSION = "0.3.0";
+export const PROTOCOL_VERSION = "0.4.0";
 
 export interface ActionCapabilities {
   register: boolean;
@@ -30,9 +30,16 @@ export interface ActionTriggered {
   context: ActionContext;
 }
 
+export type Arrange = "sequence" | "tracks" | "takes";
+
 export interface Capabilities {
   actions: ActionCapabilities;
   events: EventCapabilities;
+  /**
+   * Every method this server supports. Added in protocol 0.4.0: when it's
+   * missing, the server supports only the methods of protocol 0.3.0.
+   */
+  methods: string[];
 }
 
 export interface ClientInfo {
@@ -69,6 +76,11 @@ export interface DebugStats {
     "tracks.selectionChanged"?: EventTiming;
     "transport.changed"?: EventTiming;
   };
+  /**
+   * Per method: calls, and their time on the main thread (not counting
+   * serializing the reply).
+   */
+  methods: { [key: string]: Timing };
 }
 
 /** A result with nothing to report. */
@@ -93,6 +105,13 @@ export interface EventTiming {
   lastBytes: number;
 }
 
+/**
+ * An extension data key: up to 128 ASCII letters, digits, and `_ . : -`.
+ * Start keys with your app's name, such as `myapp.id`, so they don't clash
+ * with other programs'. REAPER saves the data in the project.
+ */
+export type ExtKey = string;
+
 /** Which full entries a collection notification carries. */
 export type Include = "none" | "changed" | "all";
 
@@ -103,6 +122,40 @@ export interface InitializeResult {
   /** This connection's number, unique while REAPER runs. */
   connection: number;
   capabilities: Capabilities;
+}
+
+/** A media file to insert, or part of one. */
+export interface InsertFile {
+  /** Absolute path of an audio, video, or MIDI file. */
+  path: string;
+  /**
+   * Seconds into the file where the item starts playing. Defaults to 0.
+   * Not supported for MIDI files.
+   */
+  sourceStart?: number | null;
+  /**
+   * Seconds of the file to use, more than 0. Defaults to the rest of the
+   * file after `sourceStart`. A range up to 1 ms past the end of the file
+   * is shortened to fit. Not supported for MIDI files.
+   */
+  length?: number | null;
+  /** The take's name. Defaults to the file's name. */
+  name?: string | null;
+  /** The new item's notes. */
+  notes?: string | null;
+  /**
+   * Extension data for the new item (at most 64 KiB per value), saved as
+   * part of the insert's undo point.
+   */
+  ext?: { [key: string]: string } | null;
+}
+
+export type InsertPosition = PositionKeyword | number;
+
+/** Result of `items.insert`. */
+export interface Inserted {
+  /** The new items, in the order of `files`. */
+  items: Item[];
 }
 
 /** A media item. `guid` is stable across sessions. */
@@ -121,6 +174,34 @@ export interface Item {
   length: number;
   /** How many takes the item has; see `takes.list`. */
   takeCount: number;
+  /** GUID of the active take, or null for an empty item. */
+  takeGuid: string | null;
+  /** Seconds into the active take's source where the item starts playing. */
+  startOffset: number | null;
+  /** The active take's playback rate; 1.0 is normal speed. */
+  playRate: number | null;
+  /**
+   * Whether the item repeats its source when it's longer than the source.
+   * When it does, `startOffset + length * playRate` can run past the end
+   * of the file.
+   */
+  loopSource: boolean;
+  /** The item's notes. Only present when asked for with `notes`. */
+  notes?: string | null;
+  /**
+   * Extension data for the keys asked for with `ext`; null where a key
+   * isn't set. Only present when asked for.
+   */
+  ext?: { [key: string]: string | null } | null;
+}
+
+/** Changes to one item. Fields left out are left alone. */
+export interface ItemChanges {
+  guid: string;
+  /** Replaces the item's notes. */
+  notes?: string | null;
+  /** Sets each key to its value (at most 64 KiB), or removes it when null. */
+  ext?: { [key: string]: string | null } | null;
 }
 
 /** Params of `items.selectionChanged`. */
@@ -190,6 +271,8 @@ export interface MarkersPage {
   markers: Marker[];
 }
 
+export type PositionKeyword = "cursor";
+
 /** Params of `project.changed`. */
 export interface Project {
   /** Index of the project's tab. */
@@ -254,6 +337,20 @@ export interface Take {
   startOffset: number;
   /** 1.0 is normal speed. */
   playRate: number;
+  /**
+   * Extension data for the keys asked for with `ext`; null where a key
+   * isn't set. Only present when asked for.
+   */
+  ext?: { [key: string]: string | null } | null;
+}
+
+/** Changes to one take. Fields left out are left alone. */
+export interface TakeChanges {
+  guid: string;
+  /** Renames the take. */
+  name?: string | null;
+  /** Sets each key to its value (at most 64 KiB), or removes it when null. */
+  ext?: { [key: string]: string | null } | null;
 }
 
 /** Result of `takes.list`. */
@@ -262,6 +359,12 @@ export interface Takes {
   item: string;
   /** In REAPER's order. */
   takes: Take[];
+}
+
+/** A span of the timeline, in seconds from the project start. */
+export interface TimeRange {
+  start: number;
+  end: number;
 }
 
 export interface Timing {
@@ -277,6 +380,10 @@ export interface Track {
   /** 1-based position, as shown in REAPER. */
   number: number;
 }
+
+export type TrackKeyword = "current" | "selected" | "new";
+
+export type TrackTarget = TrackKeyword | string;
 
 /** Params of `tracks.selectionChanged`. */
 export interface TracksChange {
@@ -321,6 +428,10 @@ export interface Transport {
   playing: boolean;
   paused: boolean;
   recording: boolean;
+  /** Seconds from the project start. */
+  editCursor: number;
+  /** Null when nothing is selected. */
+  timeSelection: TimeRange | null;
 }
 
 /** Every method, with its params and result. */
@@ -409,7 +520,7 @@ export interface Methods {
     params: Record<string, never>;
     result: Project;
   };
-  /** Get the play, pause, and record state */
+  /** Get the play state, edit cursor, and time selection */
   "transport.get": {
     params: Record<string, never>;
     result: Transport;
@@ -427,6 +538,10 @@ export interface Methods {
       limit?: number | null;
       /** GUID of a track, to list only its items. */
       track?: string | null;
+      /** Include each item's notes. */
+      notes?: boolean | null;
+      /** Include these extension data keys. */
+      ext?: ExtKey[] | null;
     };
     result: ItemsPage;
   };
@@ -437,6 +552,10 @@ export interface Methods {
       offset?: number | null;
       /** Defaults to 256. */
       limit?: number | null;
+      /** Include each item's notes. */
+      notes?: boolean | null;
+      /** Include these extension data keys. */
+      ext?: ExtKey[] | null;
     };
     result: ItemsPage;
   };
@@ -449,14 +568,98 @@ export interface Methods {
     params: {
       /** Compared case-insensitively. */
       guids: string[];
+      /** Include each item's notes. */
+      notes?: boolean | null;
+      /** Include these extension data keys. */
+      ext?: ExtKey[] | null;
     };
     result: ItemsFound;
+  };
+  /**
+   * Place media files on the timeline
+   * 
+   * Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: `{index, path, reason}`. New items get no fades.
+   */
+  "items.insert": {
+    params: {
+      /** In the order they're placed. */
+      files: InsertFile[];
+      /**
+       * Where the files start: seconds from the project start, or `cursor` for
+       * the edit cursor. Defaults to `cursor`.
+       */
+      position?: InsertPosition | null;
+      /**
+       * Which track: a track's GUID; `current` for the first selected track,
+       * else the last touched one, else a new track (what REAPER's own insert
+       * uses); `selected` for the first selected track only; or `new`. New
+       * tracks go after the first selected track, else after the last touched
+       * one, else at the end. Defaults to `current`.
+       */
+      track?: TrackTarget | null;
+      /** How several files are laid out. Defaults to `sequence`. */
+      arrange?: Arrange | null;
+      /** Seconds between files in a `sequence`. Defaults to 0. */
+      gap?: number | null;
+      /** Name for tracks this call creates. */
+      trackName?: string | null;
+      /**
+       * The undo point's description. Defaults to "Insert media (ReaSock:
+       * <client>)".
+       */
+      undo?: string | null;
+      /**
+       * Select the new items, and only them, as REAPER's own insert does.
+       * Defaults to true.
+       */
+      select?: boolean | null;
+      /**
+       * Move the edit cursor to the end of the last new item. Defaults to
+       * false.
+       */
+      moveCursor?: boolean | null;
+    };
+    result: Inserted;
+  };
+  /**
+   * Change items' notes and extension data
+   * 
+   * Applies every change as one undo point. Every GUID is checked first, so if one isn't found, nothing changes. Extension data is saved in the project, so writing it marks the project as having unsaved changes: write it in response to something the user did, not whenever a project opens. Like any edit, it's undone by undo.
+   */
+  "items.set": {
+    params: {
+      items: ItemChanges[];
+      /**
+       * The undo point's description. Defaults to "Set item properties
+       * (ReaSock: <client>)".
+       */
+      undo?: string | null;
+    };
+    result: Empty;
+  };
+  /**
+   * Rename takes and change their extension data
+   * 
+   * Works like `items.set`, for takes.
+   */
+  "takes.set": {
+    params: {
+      takes: TakeChanges[];
+      /**
+       * The undo point's description. Defaults to "Set take properties
+       * (ReaSock: <client>)".
+       */
+      undo?: string | null;
+    };
+    result: Empty;
   };
   /** Get an item's takes */
   "takes.list": {
     params: {
       /** GUID of the item. */
       item: string;
+      /** Include these extension data keys. */
+      ext?: ExtKey[] | null;
     };
     result: Takes;
   };
@@ -511,9 +714,9 @@ export interface Methods {
     result: MarkersPage;
   };
   /**
-   * Main-thread time spent on events
+   * Main-thread time spent on events and calls
    * 
-   * Reports how much of REAPER's main thread Tell is using, per timer tick and per event.
+   * Reports how much of REAPER's main thread ReaSock is using: per timer tick and per event for notifications, and per method for calls.
    */
   "debug.stats": {
     params: {
@@ -528,7 +731,7 @@ export interface Methods {
 export interface Notifications {
   /** One of this connection's actions ran */
   "action.triggered": ActionTriggered;
-  /** Play, pause, or record state changed */
+  /** The play state, edit cursor, or time selection changed */
   "transport.changed": Transport;
   /** A different project is current, or the current one was saved or became dirty */
   "project.changed": Project;
@@ -553,4 +756,5 @@ export const ErrorCode = {
   UnknownCommand: -32012,
   RegistrationFailed: -32013,
   NotFound: -32014,
+  MediaUnavailable: -32015,
 } as const;
