@@ -1,0 +1,1 @@
+First release: a WebSocket and ReaScript bridge between REAPER and other programs, with actions clients can register (Lend), state-change events (Tell), queries for tracks, items, takes, and markers (Ask), and a bundled API reference.
