@@ -45,6 +45,12 @@ pub const REGISTRATION_FAILED: AppError = AppError {
     message: "REAPER refused the registration",
 };
 
+pub const NOT_FOUND: AppError = AppError {
+    name: "NotFound",
+    code: -32014,
+    message: "nothing in the current project has that GUID",
+};
+
 pub const APP_ERRORS: &[&AppError] = &[
     &NOT_INITIALIZED,
     &ALREADY_INITIALIZED,
@@ -52,6 +58,7 @@ pub const APP_ERRORS: &[&AppError] = &[
     &UNKNOWN_ACTION,
     &UNKNOWN_COMMAND,
     &REGISTRATION_FAILED,
+    &NOT_FOUND,
 ];
 
 #[derive(Debug, PartialEq)]

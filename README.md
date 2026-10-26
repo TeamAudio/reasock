@@ -46,10 +46,14 @@ code and served by `rpc.discover`, so it always matches the running server.
 | `action.run` | `{command}`: a named command string or numeric ID | `{commandId}` |
 | `events.subscribe` | `{events: [name or {event, options}…]}` | `{events}`: all current subscriptions |
 | `events.unsubscribe` | `{events: [name…]}` | `{events}` |
+| `project.get` / `transport.get` | | the current project / transport state |
+| `items.list` | `{offset?, limit?, track?}` | `{count, offset, items}`: all items, or one track's |
 | `items.listSelected` | `{offset?, limit?}` | `{count, offset, items}` |
 | `items.get` | `{guids}` | `{items}`: each an item or `null` |
-| `tracks.listSelected` | `{offset?, limit?}` | `{count, offset, tracks}` |
+| `takes.list` | `{item}` | `{item, takes}` |
+| `tracks.list` / `tracks.listSelected` | `{offset?, limit?}` | `{count, offset, tracks}` |
 | `tracks.get` | `{guids}` | `{tracks}` |
+| `markers.list` | `{offset?, limit?}` | `{count, offset, markers}`: markers and regions |
 | `debug.stats` | `{reset?}` | main-thread time spent on events |
 
 `initialize` must come first; only `rpc.discover` is allowed before it. When a
@@ -198,9 +202,8 @@ them only when it sends something.
 - Tell: more events (edit cursor, time selection, markers, tempo). Fast,
   per-track changes such as volume and FX parameters probably belong on a
   control surface (`csurf_inst`) rather than polling.
-- Ask: more of REAPER's model (all items and tracks, takes, markers, FX)
-  following the paged, GUID-keyed pattern of `items.listSelected` and
-  `items.get`.
+- Ask: more of REAPER's model (FX, envelopes, routing) following the paged,
+  GUID-keyed pattern of `items.list` and `items.get`.
 - A ReaScript side (`ReaSock_Send` / `ReaSock_Poll`, in the style of
   reaspeech-lib) so Lua scripts can join.
 - Launch-on-trigger: remember which client owns which actions and start it if

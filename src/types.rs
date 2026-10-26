@@ -33,6 +33,8 @@ pub struct Item {
     pub position: f64,
     /// Seconds.
     pub length: f64,
+    /// How many takes the item has; see `takes.list`.
+    pub take_count: usize,
 }
 
 impl Keyed for Item {
@@ -54,6 +56,38 @@ impl Keyed for Track {
     fn key(&self) -> &str {
         &self.guid
     }
+}
+
+/// A take of a media item. `guid` is stable across sessions.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Take {
+    pub guid: String,
+    pub name: Option<String>,
+    /// Source file, or null for MIDI and empty takes.
+    pub path: Option<String>,
+    /// Whether this is the item's active take.
+    pub active: bool,
+    /// Seconds into the source where the take starts playing.
+    pub start_offset: f64,
+    /// 1.0 is normal speed.
+    pub play_rate: f64,
+}
+
+/// A marker or region.
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+pub struct Marker {
+    /// Stable across sessions once the project is saved (REAPER 7 assigns
+    /// GUIDs to markers and regions when a project is loaded).
+    pub guid: Option<String>,
+    /// The number shown in REAPER. Markers and regions are numbered separately.
+    pub number: u32,
+    pub name: String,
+    pub region: bool,
+    /// Seconds from the project start.
+    pub position: f64,
+    /// Where a region ends, in seconds; null for markers.
+    pub end: Option<f64>,
 }
 
 /// Params of `transport.changed`.
@@ -159,7 +193,7 @@ pub struct ActionContext {
     pub truncated: bool,
 }
 
-/// Result of `items.listSelected`.
+/// Result of `items.listSelected` and `items.list`.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct ItemsPage {
     /// Total selected items.
@@ -168,7 +202,7 @@ pub struct ItemsPage {
     pub items: Vec<Item>,
 }
 
-/// Result of `tracks.listSelected`.
+/// Result of `tracks.listSelected` and `tracks.list`.
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct TracksPage {
     /// Total selected tracks.
@@ -463,6 +497,44 @@ pub struct PageParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ItemsListParams {
+    /// Defaults to 0.
+    pub offset: Option<usize>,
+    /// Defaults to 256.
+    #[schemars(range(min = 1, max = 10000))]
+    pub limit: Option<usize>,
+    /// GUID of a track, to list only its items.
+    pub track: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TakesListParams {
+    /// GUID of the item.
+    pub item: String,
+}
+
+/// Result of `takes.list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct Takes {
+    /// GUID of the item.
+    pub item: String,
+    /// In REAPER's order.
+    pub takes: Vec<Take>,
+}
+
+/// Result of `markers.list`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MarkersPage {
+    /// Total markers and regions.
+    pub count: usize,
+    pub offset: usize,
+    /// In position order.
+    pub markers: Vec<Marker>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GuidsParams {
     /// Compared case-insensitively.
     #[schemars(length(min = 1, max = 10000))]
@@ -523,6 +595,7 @@ mod tests {
             track_guid: Some("{T}".into()),
             position: 1.5,
             length: 2.0,
+            take_count: 1,
         }
     }
 
@@ -547,7 +620,7 @@ mod tests {
                 "changed": [],
                 "items": [{
                     "guid": "{A}", "name": "kick", "path": null, "track": "Drums",
-                    "trackGuid": "{T}", "position": 1.5, "length": 2.0,
+                    "trackGuid": "{T}", "position": 1.5, "length": 2.0, "takeCount": 1,
                 }],
                 "truncated": false,
             })

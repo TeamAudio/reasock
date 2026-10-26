@@ -244,6 +244,66 @@ await check("mirrorSelection matches items.listSelected", async () => {
   mirrorClient.close();
 });
 
+await check("project.get and transport.get", async () => {
+  const project = await client.call("project.get");
+  assert.equal(typeof project.dirty, "boolean");
+  const transport = await client.call("transport.get");
+  assert.equal(typeof transport.playing, "boolean");
+});
+
+await check("tracks.list pages agree with one big page", async () => {
+  const all = await client.call("tracks.list", { limit: 10000 });
+  const paged = [];
+  for (let offset = 0; offset < all.count; offset++) {
+    paged.push(...(await client.call("tracks.list", { offset, limit: 1 })).tracks);
+  }
+  assert.deepEqual(paged, all.tracks);
+  assert.deepEqual(all.tracks.map((track) => track.number), all.tracks.map((_, index) => index + 1));
+});
+
+await check("items.list per track adds up to all items", async () => {
+  const all = await client.call("items.list", { limit: 10000 });
+  const { tracks } = await client.call("tracks.list", { limit: 10000 });
+  let sum = 0;
+  for (const track of tracks) {
+    const page = await client.call("items.list", { track: track.guid, limit: 10000 });
+    assert.ok(page.items.every((item) => item.trackGuid === track.guid));
+    sum += page.count;
+  }
+  assert.equal(sum, all.count);
+  await assert.rejects(client.call("items.list", { track: "{00000000-0000-0000-0000-000000000000}" }), {
+    code: -32014,
+  });
+});
+
+await check("takes.list matches takeCount, with one active take", async () => {
+  const { items } = await client.call("items.list", { limit: 50 });
+  for (const item of items) {
+    const { takes } = await client.call("takes.list", { item: item.guid });
+    assert.equal(takes.length, item.takeCount);
+    if (takes.length > 0) {
+      const active = takes.filter((take) => take.active);
+      assert.equal(active.length, 1);
+      assert.equal(active[0].name, item.name);
+      assert.equal(active[0].path, item.path);
+    }
+  }
+  await assert.rejects(client.call("takes.list", { item: "{00000000-0000-0000-0000-000000000000}" }), {
+    code: -32014,
+  });
+});
+
+await check("markers.list: regions end after they start, markers have no end", async () => {
+  const { count, markers } = await client.call("markers.list", { limit: 10000 });
+  assert.equal(markers.length, count);
+  for (const marker of markers) {
+    if (marker.region) assert.ok(marker.end > marker.position);
+    else assert.equal(marker.end, null);
+  }
+  const positions = markers.map((marker) => marker.position);
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+});
+
 raw.close();
 client.close();
 console.log(failures ? `\n${failures} failed` : "\nall passed");

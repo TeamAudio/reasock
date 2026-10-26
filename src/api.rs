@@ -13,7 +13,7 @@ use crate::collection;
 use crate::model;
 use crate::protocol::{
     self, AppError, Params, RpcError, ACTION_CONFLICT, ALREADY_INITIALIZED, APP_ERRORS,
-    NOT_INITIALIZED, REGISTRATION_FAILED, UNKNOWN_ACTION, UNKNOWN_COMMAND,
+    NOT_FOUND, NOT_INITIALIZED, REGISTRATION_FAILED, UNKNOWN_ACTION, UNKNOWN_COMMAND,
 };
 use crate::server::ConnId;
 use crate::types::*;
@@ -242,16 +242,48 @@ impl Method for Unsubscribe {
     }
 }
 
+struct GetProject;
+impl Method for GetProject {
+    const NAME: &'static str = "project.get";
+    const SUMMARY: &'static str = "Get the current project";
+    type Params = NoParams;
+    type Result = Project;
+
+    fn call(_: &Ctx, _: NoParams) -> Result<Project, RpcError> {
+        Ok(model::project())
+    }
+}
+
+struct GetTransport;
+impl Method for GetTransport {
+    const NAME: &'static str = "transport.get";
+    const SUMMARY: &'static str = "Get the play, pause, and record state";
+    type Params = NoParams;
+    type Result = Transport;
+
+    fn call(_: &Ctx, _: NoParams) -> Result<Transport, RpcError> {
+        Ok(model::transport())
+    }
+}
+
 /// `offset` and validated `limit` for paged methods.
 fn page(params: &PageParams) -> Result<(usize, usize), RpcError> {
-    let limit = params.limit.unwrap_or(collection::DEFAULT_LIMIT);
+    paging(params.offset, params.limit)
+}
+
+fn paging(offset: Option<usize>, limit: Option<usize>) -> Result<(usize, usize), RpcError> {
+    let limit = limit.unwrap_or(collection::DEFAULT_LIMIT);
     if !(1..=collection::MAX_LIMIT).contains(&limit) {
         return Err(RpcError::invalid_params(format!(
             "limit must be between 1 and {}",
             collection::MAX_LIMIT
         )));
     }
-    Ok((params.offset.unwrap_or(0), limit))
+    Ok((offset.unwrap_or(0), limit))
+}
+
+fn not_found(what: &str, guid: &str) -> RpcError {
+    RpcError::app(&NOT_FOUND, format!("no {what} with GUID {guid}"))
 }
 
 fn guids(params: GuidsParams) -> Result<Vec<String>, RpcError> {
@@ -262,6 +294,72 @@ fn guids(params: GuidsParams) -> Result<Vec<String>, RpcError> {
         )));
     }
     Ok(params.guids)
+}
+
+struct ListItems;
+impl Method for ListItems {
+    const NAME: &'static str = "items.list";
+    const SUMMARY: &'static str = "Get all items, or one track's, a page at a time";
+    const DESCRIPTION: &'static str = "Items come in REAPER's order: by track, then position.";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND];
+    type Params = ItemsListParams;
+    type Result = ItemsPage;
+
+    fn call(_: &Ctx, params: ItemsListParams) -> Result<ItemsPage, RpcError> {
+        let (offset, limit) = paging(params.offset, params.limit)?;
+        let track = match &params.track {
+            Some(guid) => Some(model::find_track(guid).ok_or_else(|| not_found("track", guid))?),
+            None => None,
+        };
+        let (count, items) = model::items_page(offset, limit, track);
+        Ok(ItemsPage { count, offset, items })
+    }
+}
+
+struct ListTakes;
+impl Method for ListTakes {
+    const NAME: &'static str = "takes.list";
+    const SUMMARY: &'static str = "Get an item's takes";
+    const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND];
+    type Params = TakesListParams;
+    type Result = Takes;
+
+    fn call(_: &Ctx, params: TakesListParams) -> Result<Takes, RpcError> {
+        let item = model::find_item(&params.item).ok_or_else(|| not_found("item", &params.item))?;
+        Ok(Takes {
+            takes: unsafe { model::takes(item) },
+            item: params.item,
+        })
+    }
+}
+
+struct ListTracks;
+impl Method for ListTracks {
+    const NAME: &'static str = "tracks.list";
+    const SUMMARY: &'static str = "Get all tracks, a page at a time";
+    const DESCRIPTION: &'static str = "In order. The master track is not included.";
+    type Params = PageParams;
+    type Result = TracksPage;
+
+    fn call(_: &Ctx, params: PageParams) -> Result<TracksPage, RpcError> {
+        let (offset, limit) = page(&params)?;
+        let (count, tracks) = model::tracks_page(offset, limit);
+        Ok(TracksPage { count, offset, tracks })
+    }
+}
+
+struct ListMarkers;
+impl Method for ListMarkers {
+    const NAME: &'static str = "markers.list";
+    const SUMMARY: &'static str = "Get markers and regions, a page at a time";
+    type Params = PageParams;
+    type Result = MarkersPage;
+
+    fn call(_: &Ctx, params: PageParams) -> Result<MarkersPage, RpcError> {
+        let (offset, limit) = page(&params)?;
+        let (count, markers) = model::markers_page(offset, limit);
+        Ok(MarkersPage { count, offset, markers })
+    }
 }
 
 struct ListSelectedItems;
@@ -437,10 +535,16 @@ pub fn methods() -> &'static [Entry] {
             entry::<RunAction>(),
             entry::<Subscribe>(),
             entry::<Unsubscribe>(),
+            entry::<GetProject>(),
+            entry::<GetTransport>(),
+            entry::<ListItems>(),
             entry::<ListSelectedItems>(),
             entry::<GetItems>(),
+            entry::<ListTakes>(),
+            entry::<ListTracks>(),
             entry::<ListSelectedTracks>(),
             entry::<GetTracks>(),
+            entry::<ListMarkers>(),
             entry::<GetDebugStats>(),
         ]
     })

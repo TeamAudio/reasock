@@ -356,6 +356,97 @@
       ]
     },
     {
+      "name": "project.get",
+      "summary": "Get the current project",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Project"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "transport.get",
+      "summary": "Get the play, pause, and record state",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Transport"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "items.list",
+      "summary": "Get all items, or one track's, a page at a time",
+      "description": "Items come in REAPER's order: by track, then position.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "offset",
+          "description": "Defaults to 0.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "limit",
+          "description": "Defaults to 256.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        },
+        {
+          "name": "track",
+          "description": "GUID of a track, to list only its items.",
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ItemsPage"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/NotFound"
+        }
+      ]
+    },
+    {
       "name": "items.listSelected",
       "summary": "Get the selected items, a page at a time",
       "paramStructure": "by-name",
@@ -422,6 +513,79 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/ItemsFound"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "takes.list",
+      "summary": "Get an item's takes",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "item",
+          "description": "GUID of the item.",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Takes"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        },
+        {
+          "$ref": "#/components/errors/NotFound"
+        }
+      ]
+    },
+    {
+      "name": "tracks.list",
+      "summary": "Get all tracks, a page at a time",
+      "description": "In order. The master track is not included.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "offset",
+          "description": "Defaults to 0.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "limit",
+          "description": "Defaults to 256.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TracksPage"
         }
       },
       "errors": [
@@ -498,6 +662,49 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/TracksFound"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotInitialized"
+        }
+      ]
+    },
+    {
+      "name": "markers.list",
+      "summary": "Get markers and regions, a page at a time",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "offset",
+          "description": "Defaults to 0.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "limit",
+          "description": "Defaults to 256.",
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 1,
+            "maximum": 10000
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/MarkersPage"
         }
       },
       "errors": [
@@ -1161,6 +1368,12 @@
             "type": "number",
             "format": "double",
             "description": "Seconds."
+          },
+          "takeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "How many takes the item has; see `takes.list`."
           }
         },
         "required": [
@@ -1170,7 +1383,8 @@
           "track",
           "trackGuid",
           "position",
-          "length"
+          "length",
+          "takeCount"
         ],
         "description": "A media item. `guid` is stable across sessions."
       },
@@ -1222,7 +1436,121 @@
           "offset",
           "items"
         ],
-        "description": "Result of `items.listSelected`."
+        "description": "Result of `items.listSelected` and `items.list`."
+      },
+      "Marker": {
+        "type": "object",
+        "properties": {
+          "guid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable across sessions once the project is saved (REAPER 7 assigns\nGUIDs to markers and regions when a project is loaded)."
+          },
+          "number": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The number shown in REAPER. Markers and regions are numbered separately."
+          },
+          "name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds from the project start."
+          },
+          "end": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Where a region ends, in seconds; null for markers."
+          }
+        },
+        "required": [
+          "guid",
+          "number",
+          "name",
+          "region",
+          "position",
+          "end"
+        ],
+        "description": "A marker or region."
+      },
+      "MarkersPage": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "description": "Total markers and regions."
+          },
+          "offset": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "markers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Marker"
+            },
+            "description": "In position order."
+          }
+        },
+        "required": [
+          "count",
+          "offset",
+          "markers"
+        ],
+        "description": "Result of `markers.list`."
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "tab": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0,
+            "description": "Index of the project's tab."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name without extension, or null until the project is saved."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path of the project file, or null until the project is saved."
+          },
+          "dirty": {
+            "type": "boolean",
+            "description": "Whether there are unsaved changes."
+          }
+        },
+        "required": [
+          "tab",
+          "name",
+          "path",
+          "dirty"
+        ],
+        "description": "Params of `project.changed`."
       },
       "RanAction": {
         "type": "object",
@@ -1327,6 +1655,71 @@
           "events"
         ]
       },
+      "Take": {
+        "type": "object",
+        "properties": {
+          "guid": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Source file, or null for MIDI and empty takes."
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether this is the item's active take."
+          },
+          "startOffset": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds into the source where the take starts playing."
+          },
+          "playRate": {
+            "type": "number",
+            "format": "double",
+            "description": "1.0 is normal speed."
+          }
+        },
+        "required": [
+          "guid",
+          "name",
+          "path",
+          "active",
+          "startOffset",
+          "playRate"
+        ],
+        "description": "A take of a media item. `guid` is stable across sessions."
+      },
+      "Takes": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string",
+            "description": "GUID of the item."
+          },
+          "takes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Take"
+            },
+            "description": "In REAPER's order."
+          }
+        },
+        "required": [
+          "item",
+          "takes"
+        ],
+        "description": "Result of `takes.list`."
+      },
       "Timing": {
         "type": "object",
         "properties": {
@@ -1425,7 +1818,27 @@
           "offset",
           "tracks"
         ],
-        "description": "Result of `tracks.listSelected`."
+        "description": "Result of `tracks.listSelected` and `tracks.list`."
+      },
+      "Transport": {
+        "type": "object",
+        "properties": {
+          "playing": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "recording": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "playing",
+          "paused",
+          "recording"
+        ],
+        "description": "Params of `transport.changed`."
       }
     },
     "errors": {
@@ -1452,6 +1865,10 @@
       "RegistrationFailed": {
         "code": -32013,
         "message": "REAPER refused the registration"
+      },
+      "NotFound": {
+        "code": -32014,
+        "message": "nothing in the current project has that GUID"
       }
     }
   }

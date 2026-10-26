@@ -3,10 +3,10 @@
 //! Items and tracks carry their GUIDs, which stay stable across sessions,
 //! unlike REAPER's pointers and indexes.
 
-use crate::types::{Item, Project, ProjectEdit, Track, Transport};
+use crate::types::{Item, Marker, Project, ProjectEdit, Take, Track, Transport};
 use reaper_medium::{
-    ItemAttributeKey, MasterTrackBehavior, MediaItem, MediaTrack, ProjectContext, ProjectRef,
-    Reaper, TrackAttributeKey,
+    ItemAttributeKey, MasterTrackBehavior, MediaItem, MediaItemTake, MediaTrack, ProjectContext,
+    ProjectRef, Reaper, TakeAttributeKey, TrackAttributeKey,
 };
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
@@ -87,19 +87,7 @@ unsafe fn item_info(item: MediaItem, scratch: &mut ItemScratch) -> Item {
     let name = take.and_then(|take| {
         reaper.get_take_name(take, |name| name.ok().map(|name| name.to_str().to_owned()))
     });
-    let path = take
-        .and_then(|take| reaper.get_media_item_take_source(take))
-        .map(|source| {
-            let buffer = &mut scratch.path;
-            buffer[0] = 0;
-            reaper.low().GetMediaSourceFileName(
-                source.as_ptr(),
-                buffer.as_mut_ptr(),
-                buffer.len() as i32,
-            );
-            from_buffer(buffer)
-        })
-        .filter(|path| !path.is_empty());
+    let path = take.and_then(|take| take_path(take, &mut scratch.path));
     let (track, track_guid) = match reaper.get_media_item_track(item) {
         Some(track) => {
             let (name, guid) = scratch.track(track).clone();
@@ -115,6 +103,7 @@ unsafe fn item_info(item: MediaItem, scratch: &mut ItemScratch) -> Item {
         track_guid,
         position: reaper.get_media_item_info_value(item, ItemAttributeKey::Position),
         length: reaper.get_media_item_info_value(item, ItemAttributeKey::Length),
+        take_count: reaper.low().CountTakes(item.as_ptr()).max(0) as usize,
     }
 }
 
@@ -292,4 +281,134 @@ pub fn project_edit() -> ProjectEdit {
         state_change_count: reaper.get_project_state_change_count(CURRENT),
         last_undo: reaper.undo_can_undo_2(CURRENT, |description| description.to_str().to_owned()),
     }
+}
+
+/// # Safety
+/// `take` must be a valid take in the current project.
+unsafe fn take_path(take: MediaItemTake, buffer: &mut [c_char]) -> Option<String> {
+    let reaper = Reaper::get();
+    let source = reaper.get_media_item_take_source(take)?;
+    buffer[0] = 0;
+    reaper
+        .low()
+        .GetMediaSourceFileName(source.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32);
+    Some(from_buffer(buffer)).filter(|path| !path.is_empty())
+}
+
+/// All tracks in order (the master track is not included).
+pub fn tracks_page(offset: usize, limit: usize) -> (usize, Vec<Track>) {
+    let reaper = Reaper::get();
+    let count = reaper.count_tracks(CURRENT);
+    let tracks = (0..count)
+        .skip(offset)
+        .take(limit)
+        .filter_map(|index| reaper.get_track(CURRENT, index))
+        .map(|track| unsafe { track_info(track) })
+        .collect();
+    (count as usize, tracks)
+}
+
+pub fn find_track(guid: &str) -> Option<MediaTrack> {
+    let reaper = Reaper::get();
+    (0..reaper.count_tracks(CURRENT))
+        .filter_map(|index| reaper.get_track(CURRENT, index))
+        .find(|&track| unsafe { track_guid(track) }.eq_ignore_ascii_case(guid))
+}
+
+pub fn find_item(guid: &str) -> Option<MediaItem> {
+    let reaper = Reaper::get();
+    (0..reaper.count_media_items(CURRENT))
+        .filter_map(|index| reaper.get_media_item(CURRENT, index))
+        .find(|&item| unsafe { item_guid(item) }.eq_ignore_ascii_case(guid))
+}
+
+/// All items in the project, or only those on `track`, in REAPER's order
+/// (by track, then position).
+pub fn items_page(offset: usize, limit: usize, track: Option<MediaTrack>) -> (usize, Vec<Item>) {
+    let reaper = Reaper::get();
+    let mut scratch = ItemScratch::new();
+    let (count, item_at): (u32, Box<dyn Fn(u32) -> Option<MediaItem>>) = match track {
+        Some(track) => (
+            unsafe { reaper.count_track_media_items(track) },
+            Box::new(move |index| unsafe { reaper.get_track_media_item(track, index) }),
+        ),
+        None => (
+            reaper.count_media_items(CURRENT),
+            Box::new(|index| reaper.get_media_item(CURRENT, index)),
+        ),
+    };
+    let items = (0..count)
+        .skip(offset)
+        .take(limit)
+        .filter_map(|index| item_at(index))
+        .map(|item| unsafe { item_info(item, &mut scratch) })
+        .collect();
+    (count as usize, items)
+}
+
+/// # Safety
+/// `item` must be a valid item in the current project.
+pub unsafe fn takes(item: MediaItem) -> Vec<Take> {
+    let reaper = Reaper::get();
+    let active = reaper.get_active_take(item);
+    let mut path = vec![0 as c_char; 4096];
+    (0..reaper.low().CountTakes(item.as_ptr()))
+        .filter_map(|index| MediaItemTake::new(reaper.low().GetTake(item.as_ptr(), index)))
+        .map(|take| {
+            let mut guid = [0 as c_char; 64];
+            reaper.low().GetSetMediaItemTakeInfo_String(
+                take.as_ptr(),
+                c"GUID".as_ptr(),
+                guid.as_mut_ptr(),
+                false,
+            );
+            Take {
+                guid: from_buffer(&guid),
+                name: reaper.get_take_name(take, |name| name.ok().map(|name| name.to_str().to_owned())),
+                path: take_path(take, &mut path),
+                active: Some(take) == active,
+                start_offset: reaper.get_media_item_take_info_value(take, TakeAttributeKey::StartOffs),
+                play_rate: reaper.get_media_item_take_info_value(take, TakeAttributeKey::PlayRate),
+            }
+        })
+        .collect()
+}
+
+/// Markers and regions in position order.
+pub fn markers_page(offset: usize, limit: usize) -> (usize, Vec<Marker>) {
+    let reaper = Reaper::get();
+    let count = reaper.count_project_markers(CURRENT).total_count;
+    let markers = (0..count)
+        .skip(offset)
+        .take(limit)
+        .filter_map(|index| {
+            reaper.enum_project_markers_3(CURRENT, index, |marker| {
+                let marker = marker?;
+                Some(Marker {
+                    guid: marker_guid(index),
+                    number: marker.id.get(),
+                    name: marker.name.to_str().to_owned(),
+                    region: marker.region_end_position.is_some(),
+                    position: marker.position.get(),
+                    end: marker.region_end_position.map(|end| end.get()),
+                })
+            })
+        })
+        .collect();
+    (count as usize, markers)
+}
+
+/// The GUID of the marker or region at enumeration `index`, if REAPER has one.
+fn marker_guid(index: u32) -> Option<String> {
+    let key = std::ffi::CString::new(format!("MARKER_GUID:{index}")).ok()?;
+    let mut guid = [0 as c_char; 64];
+    let found = unsafe {
+        Reaper::get().low().GetSetProjectInfo_String(
+            std::ptr::null_mut(),
+            key.as_ptr(),
+            guid.as_mut_ptr(),
+            false,
+        )
+    };
+    Some(from_buffer(&guid)).filter(|guid| found && !guid.is_empty())
 }
