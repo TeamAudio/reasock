@@ -43,7 +43,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add -A Cargo.toml Cargo.lock releases
+          git add -A Cargo.toml Cargo.lock clients/typescript/package.json clients/typescript/package-lock.json releases
           git commit -m "Release prep v${VERSION}"
           git push origin "$branch"
 
