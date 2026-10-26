@@ -190,6 +190,11 @@ them only when it sends something.
 ## Next
 
 - Close sockets cleanly when REAPER exits (clients currently see a reset).
+- Enforce documented param constraints automatically once they multiply:
+  `garde` attributes are read by schemars, so one attribute could document
+  and enforce a constraint. Full JSON Schema validation (`jsonschema`) was
+  measured at +58 crates and roughly 4x the extension's size, so it's ruled
+  out.
 - Tell: more events (edit cursor, time selection, markers, tempo). Fast,
   per-track changes such as volume and FX parameters probably belong on a
   control surface (`csurf_inst`) rather than polling.
