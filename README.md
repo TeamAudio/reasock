@@ -139,8 +139,9 @@ bring a take name, item notes, and extension data. `items.set` and
 
 - Every call is one undo point, named after the client unless it passes
   `undo`. Everything is checked before anything changes, so a request with
-  one bad file or unknown GUID changes nothing. A file REAPER can't use is
-  reported as `MediaUnavailable` with `data: {index, path, reason}`.
+  one bad file or unknown GUID changes nothing. An error about one file (one
+  REAPER can't use is `MediaUnavailable`) says which in `data: {index, path,
+  reason}`.
 - Extension data is a per-item or per-take string, saved in the project
   (`P_EXT:<key>`, readable from ReaScript too). Prefix keys with your app's
   name, such as `myapp.id`. Values are at most 64 KiB, and `null` removes a

@@ -495,7 +495,8 @@ impl Method for InsertItems {
     const SUMMARY: &'static str = "Place media files on the timeline";
     const DESCRIPTION: &'static str = "Creates items from files, or parts of files, as a single \
         undo point. Every file is checked before anything changes, so if one can't be used, \
-        nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: \
+        nothing is inserted. Errors about one file (`MediaUnavailable`, or invalid params such \
+        as a range past the end of the file) say which file and why in `data`: \
         `{index, path, reason}`. New items get no fades.";
     const ERRORS: &'static [&'static AppError] = &[&NOT_FOUND, &MEDIA_UNAVAILABLE];
     type Params = InsertParams;

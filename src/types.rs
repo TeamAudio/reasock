@@ -26,7 +26,7 @@ pub struct Item {
     pub name: Option<String>,
     /// Source file of the active take, or null for MIDI and empty items.
     pub path: Option<String>,
-    /// Name of the item's track.
+    /// Name of the item's track; empty when the track has no name.
     pub track: Option<String>,
     pub track_guid: Option<String>,
     /// Seconds from the project start.
@@ -64,6 +64,7 @@ impl Keyed for Item {
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 pub struct Track {
     pub guid: String,
+    /// Empty when the track has no name.
     pub name: Option<String>,
     /// 1-based position, as shown in REAPER.
     pub number: i64,
@@ -725,7 +726,8 @@ pub struct InsertFile {
     pub length: Option<f64>,
     /// The take's name. Defaults to the file's name.
     pub name: Option<String>,
-    /// The new item's notes.
+    /// The new item's notes. With `arrange: takes`, only the first file may
+    /// have notes or ext, since there's one new item.
     pub notes: Option<String>,
     /// Extension data for the new item (at most 64 KiB per value), saved as
     /// part of the insert's undo point.
@@ -741,8 +743,8 @@ pub enum Arrange {
     /// Each file on its own new track (after the target track), all at the
     /// same position.
     Tracks,
-    /// All files as takes of one item, as long as the longest file. The first
-    /// file's take is active.
+    /// All files as takes of one item. The first file's take is active, and
+    /// the item is as long as it.
     Takes,
 }
 

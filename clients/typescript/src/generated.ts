@@ -141,7 +141,10 @@ export interface InsertFile {
   length?: number | null;
   /** The take's name. Defaults to the file's name. */
   name?: string | null;
-  /** The new item's notes. */
+  /**
+   * The new item's notes. With `arrange: takes`, only the first file may
+   * have notes or ext, since there's one new item.
+   */
   notes?: string | null;
   /**
    * Extension data for the new item (at most 64 KiB per value), saved as
@@ -165,7 +168,7 @@ export interface Item {
   name: string | null;
   /** Source file of the active take, or null for MIDI and empty items. */
   path: string | null;
-  /** Name of the item's track. */
+  /** Name of the item's track; empty when the track has no name. */
   track: string | null;
   trackGuid: string | null;
   /** Seconds from the project start. */
@@ -376,6 +379,7 @@ export interface Timing {
 /** A track. `guid` is stable across sessions. */
 export interface Track {
   guid: string;
+  /** Empty when the track has no name. */
   name: string | null;
   /** 1-based position, as shown in REAPER. */
   number: number;
@@ -578,7 +582,7 @@ export interface Methods {
   /**
    * Place media files on the timeline
    * 
-   * Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: `{index, path, reason}`. New items get no fades.
+   * Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted. Errors about one file (`MediaUnavailable`, or invalid params such as a range past the end of the file) say which file and why in `data`: `{index, path, reason}`. New items get no fades.
    */
   "items.insert": {
     params: {

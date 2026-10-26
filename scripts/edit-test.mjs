@@ -166,18 +166,24 @@ await check("items.insert arranges files on tracks or as takes", async () => {
   await undo();
 
   const asTakes = await client.call("items.insert", {
-    files: [{ path: short, ext: { "edittest.take": "s" } }, { path: long }],
+    files: [{ path: short, name: "variation 1", ext: { "edittest.id": "v" } }, { path: long, name: "variation 2" }],
     arrange: "takes",
     position: 40,
   });
   assert.equal(asTakes.items.length, 1);
   const [item] = asTakes.items;
   assert.equal(item.takeCount, 2);
-  close(item.length, 4, "as long as the longest file");
+  close(item.length, 1.5, "as long as the first file");
   assert.equal(item.path, short, "the first file's take is active");
-  const { takes } = await client.call("takes.list", { item: item.guid, ext: ["edittest.take"] });
-  assert.deepEqual(takes.map((take) => take.ext["edittest.take"]), ["s", null]);
+  const { takes } = await client.call("takes.list", { item: item.guid });
+  assert.deepEqual(takes.map((take) => take.name), ["variation 1", "variation 2"]);
+  const [tagged] = (await client.call("items.get", { guids: [item.guid], ext: ["edittest.id"] })).items;
+  assert.equal(tagged.ext["edittest.id"], "v", "ext goes on the one new item");
   await undo();
+  await assert.rejects(
+    client.call("items.insert", { files: [{ path: short }, { path: long, notes: "x" }], arrange: "takes" }),
+    (error) => error.code === -32602 && error.data.index === 1,
+  );
   assert.deepEqual(await counts(), before);
 });
 
@@ -193,7 +199,10 @@ await check("items.insert checks every file first, and says which one failed", a
   );
   await assert.rejects(client.call("items.insert", { files: [{ path: "relative.wav" }] }), { code: -32602 });
   await assert.rejects(client.call("items.insert", { files: [{ path: long, sourceStart: 4 }] }), { code: -32602 });
-  await assert.rejects(client.call("items.insert", { files: [{ path: long, length: 4.01 }] }), { code: -32602 });
+  await assert.rejects(
+    client.call("items.insert", { files: [{ path: short }, { path: long, length: 4.01 }] }),
+    (error) => error.code === -32602 && error.data.index === 1 && error.data.path === long,
+  );
   await assert.rejects(client.call("items.insert", { files: [] }), { code: -32602 });
   await assert.rejects(client.call("items.insert", { files: [{ path: long, ext: { "bad key": "x" } }] }), {
     code: -32602,

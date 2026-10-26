@@ -636,7 +636,7 @@
     {
       "name": "items.insert",
       "summary": "Place media files on the timeline",
-      "description": "Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted; a `MediaUnavailable` error's `data` says which file and why: `{index, path, reason}`. New items get no fades.",
+      "description": "Creates items from files, or parts of files, as a single undo point. Every file is checked before anything changes, so if one can't be used, nothing is inserted. Errors about one file (`MediaUnavailable`, or invalid params such as a range past the end of the file) say which file and why in `data`: `{index, path, reason}`. New items get no fades.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -1649,7 +1649,7 @@
           {
             "type": "string",
             "const": "takes",
-            "description": "All files as takes of one item, as long as the longest file. The first\nfile's take is active."
+            "description": "All files as takes of one item. The first file's take is active, and\nthe item is as long as it."
           }
         ]
       },
@@ -1954,7 +1954,7 @@
               "string",
               "null"
             ],
-            "description": "The new item's notes."
+            "description": "The new item's notes. With `arrange: takes`, only the first file may\nhave notes or ext, since there's one new item."
           },
           "ext": {
             "type": [
@@ -2028,7 +2028,7 @@
               "string",
               "null"
             ],
-            "description": "Name of the item's track."
+            "description": "Name of the item's track; empty when the track has no name."
           },
           "trackGuid": {
             "type": [
@@ -2678,7 +2678,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Empty when the track has no name."
           },
           "number": {
             "type": "integer",

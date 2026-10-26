@@ -113,21 +113,38 @@ fn media_unavailable(index: usize, path: &str, reason: &str) -> RpcError {
         .with_data(json!({ "index": index, "path": path, "reason": reason }))
 }
 
+/// Invalid params in one file's entry, saying which file and why.
+fn bad_file(index: usize, path: &str, reason: impl Into<String>) -> RpcError {
+    let reason = reason.into();
+    RpcError::invalid_params(format!("{reason}: {path}"))
+        .with_data(json!({ "index": index, "path": path, "reason": reason }))
+}
+
+/// Adds which file to an error about one file's entry, if it doesn't say yet.
+fn for_file(error: RpcError, index: usize, path: &str) -> RpcError {
+    if error.data.is_some() {
+        return error;
+    }
+    let reason = error.message.clone();
+    error.with_data(json!({ "index": index, "path": path, "reason": reason }))
+}
+
 /// Opens file `index` and checks the requested range against it.
 fn open(index: usize, file: &InsertFile) -> Result<Source, RpcError> {
     let low = Reaper::get().low();
     let path = Path::new(&file.path);
     if !path.is_absolute() {
-        return Err(RpcError::invalid_params(format!("path must be absolute: {}", file.path)));
+        return Err(bad_file(index, &file.path, "path must be absolute"));
     }
     if !path.is_file() {
         return Err(media_unavailable(index, &file.path, "no such file"));
     }
-    let c_path = c_string(&file.path, "path")?;
+    let c_path = c_string(&file.path, "path").map_err(|error| for_file(error, index, &file.path))?;
     let take_name = match &file.name {
-        Some(name) => c_string(name, "name")?,
-        None => c_string(&path.file_name().unwrap_or_default().to_string_lossy(), "path")?,
-    };
+        Some(name) => c_string(name, "name"),
+        None => c_string(&path.file_name().unwrap_or_default().to_string_lossy(), "path"),
+    }
+    .map_err(|error| for_file(error, index, &file.path))?;
     let pcm = unsafe { low.PCM_Source_CreateFromFileEx(c_path.as_ptr(), false) };
     if pcm.is_null() {
         return Err(media_unavailable(index, &file.path, "REAPER can't open this file"));
@@ -157,27 +174,25 @@ fn range(index: usize, file: &InsertFile, total: f64, in_qn: bool) -> Result<(f6
     }
     if in_qn {
         if file.source_start.is_some() || file.length.is_some() {
-            return Err(RpcError::invalid_params(format!(
-                "sourceStart and length aren't supported for MIDI files: {}",
-                file.path
-            )));
+            return Err(bad_file(index, &file.path, "sourceStart and length aren't supported for MIDI files"));
         }
         return Ok((0.0, total));
     }
     let start = file.source_start.unwrap_or(0.0);
     if !(start >= 0.0 && start < total) {
-        return Err(RpcError::invalid_params(format!(
-            "sourceStart must be at least 0 and less than the file's length ({total}s): {}",
-            file.path
-        )));
+        return Err(bad_file(
+            index,
+            &file.path,
+            format!("sourceStart must be at least 0 and less than the file's length ({total}s)"),
+        ));
     }
     let length = file.length.unwrap_or(total - start);
     if !(length > 0.0) || start + length > total + TOLERANCE {
-        return Err(RpcError::invalid_params(format!(
-            "length must be more than 0, and sourceStart + length at most the file's length \
-             ({total}s): {}",
-            file.path
-        )));
+        return Err(bad_file(
+            index,
+            &file.path,
+            format!("length must be more than 0, and sourceStart + length at most the file's length ({total}s)"),
+        ));
     }
     Ok((start, length.min(total - start)))
 }
@@ -321,13 +336,24 @@ pub fn insert(client: &str, params: InsertParams) -> Result<Inserted, RpcError> 
     let extras = params
         .files
         .iter()
-        .map(|file| {
+        .enumerate()
+        .map(|(index, file)| {
+            // Notes and ext describe the new item, and `takes` makes only one.
+            if arrange == Arrange::Takes && index > 0 && (file.notes.is_some() || file.ext.is_some()) {
+                return Err(bad_file(
+                    index,
+                    &file.path,
+                    "with arrange \"takes\" there's one new item, so only the first file may have notes or ext",
+                ));
+            }
             let ext = file.ext.iter().flatten().map(|(key, value)| (key, Some(value)));
-            check_ext(ext.clone())?;
-            Ok(FileExtras {
-                notes: file.notes.as_deref().map(|notes| c_string(notes, "notes")).transpose()?,
-                ext: ext_writes(ext)?,
-            })
+            let checked = check_ext(ext.clone()).and_then(|()| {
+                Ok(FileExtras {
+                    notes: file.notes.as_deref().map(|notes| c_string(notes, "notes")).transpose()?,
+                    ext: ext_writes(ext)?,
+                })
+            });
+            checked.map_err(|error| for_file(error, index, &file.path))
         })
         .collect::<Result<Vec<_>, RpcError>>()?;
 
@@ -376,22 +402,20 @@ pub fn insert(client: &str, params: InsertParams) -> Result<Inserted, RpcError> 
                 }
             }
             Arrange::Takes => {
+                // As long as the first file, whose take is the one that plays.
                 let item = low.AddMediaItemToTrack(track);
-                let length = sources.0.iter().map(|source| seconds(source, start)).fold(0.0, f64::max);
+                let length = seconds(&sources.0[0], start);
                 low.SetMediaItemInfo_Value(item, c"D_POSITION".as_ptr(), start);
                 low.SetMediaItemInfo_Value(item, c"D_LENGTH".as_ptr(), length);
                 let mut first = None;
-                for (source, extras) in sources.0.iter_mut().zip(&extras) {
+                for source in sources.0.iter_mut() {
                     let take = add_take(item, source);
                     first.get_or_insert(take);
-                    for (param, value) in &extras.ext {
-                        low.GetSetMediaItemTakeInfo_String(take, param.as_ptr(), setter(value), true);
-                    }
                 }
                 if let Some(take) = first {
                     low.SetActiveTake(take);
                 }
-                write_item_extras(item, extras[0].notes.as_ref(), &[]);
+                write_item_extras(item, extras[0].notes.as_ref(), &extras[0].ext);
                 items.push(item);
                 end = start + length;
             }
