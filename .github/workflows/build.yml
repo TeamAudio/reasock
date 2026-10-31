@@ -53,7 +53,7 @@ jobs:
             asset: reaper_reasock-linux-aarch64.so
             test: true
           - platform: darwin-arm64
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             built: libreasock.dylib
             asset: reaper_reasock-darwin-arm64.dylib
@@ -61,7 +61,7 @@ jobs:
             test: true
           # Cross-compiled on Apple Silicon, so its tests don't run.
           - platform: darwin64
-            os: macos-14
+            os: macos-15
             target: x86_64-apple-darwin
             built: libreasock.dylib
             asset: reaper_reasock-darwin64.dylib
@@ -80,6 +80,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bump to rebuild native code: the key does not include the runner image.
+          prefix-key: v1-rust
           key: ${{ matrix.target }}
 
       - name: Test
